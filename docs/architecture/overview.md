@@ -11,6 +11,7 @@ cmd/cimon/
 └── db.go                # `cimon db` subcommand
 
 internal/
+├── app/                 # root Bubbletea model — wires poller→DB→screens
 ├── config/              # .cimon.yml parsing, zero-config detection
 ├── models/              # WorkflowRun, Job, PullRequest, PollResult
 ├── github/              # HTTP client, ETag caching, runs/pulls/actions/search
@@ -21,7 +22,7 @@ internal/
 ├── confidence/          # 5-signal release confidence scoring
 ├── notify/              # desktop notifications (Linux/macOS)
 └── ui/
-    ├── app.go           # root Bubbletea model
+    ├── app.go           # Screen type enum
     ├── keys.go          # KeyMap
     ├── theme.go         # Tokyo Night palette
     ├── screens/         # dashboard, timeline, release, metrics
@@ -34,7 +35,7 @@ internal/
 .cimon.yml → CimonConfig → github.Client → Poller → PollResult → App → Screens → Components
 ```
 
-1. **Startup.** `config.Load()` finds `.cimon.yml` (CWD walk-up), parses it. v1 configs auto-migrate to v2 format. App creates `github.Client` (discovers token via `GITHUB_TOKEN` env / `GH_TOKEN` env / `gh auth token`), `polling.Poller`, and initializes screen models.
+1. **Startup.** `main.go` loads config via `config.Load()` (CWD walk-up), discovers GitHub token, opens SQLite DB, then passes all three to `app.NewApp()`. The App creates `polling.Poller`, builds config-derived lookups (release/agent workflow maps), and initializes screen models. The `internal/app` package is separate from `internal/ui` to avoid circular imports (screens import `ui` for theme).
 
 2. **Poll cycle.** `Poller` runs in a goroutine, polls each repo, sends `PollResult` over a channel. A `tea.Cmd` reads from the channel and delivers it as a message to the Bubbletea update loop. Adaptive cadence: idle (30s) when nothing running, active (5s) when in-progress, cooldown (N idle ticks) before dropping back.
 

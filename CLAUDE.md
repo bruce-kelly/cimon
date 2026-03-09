@@ -22,11 +22,13 @@ go vet ./...                        # lint
 
 ```
 cmd/cimon/
-├── main.go              # Cobra root command, Bubbletea program launch
+├── main.go              # Cobra root command, config/token/DB init, launches App
 ├── init.go              # interactive setup wizard (token, repo, workflow discovery)
 └── db.go                # `cimon db` subcommand: stats, export, prune
 
 internal/
+├── app/
+│   └── app.go           # App — root Bubbletea model, wires poller→DB→screens, key dispatch
 ├── config/
 │   ├── config.go        # .cimon.yml v2 parser, v1 auto-migration, all config structs, Load/LoadFromPath
 │   ├── config_test.go   # v2 parsing, v1 migration, defaults, validation, ConfigError
@@ -78,7 +80,7 @@ internal/
 │   ├── notify.go        # CanNotify, Send — Linux notify-send, macOS osascript
 │   └── notify_test.go
 └── ui/
-    ├── app.go           # App — root Bubbletea model, screen switching, key dispatch
+    ├── app.go           # Screen type enum (ScreenDashboard, ScreenTimeline, etc.)
     ├── keys.go          # KeyMap — all keybindings via bubbles/v2/key
     ├── theme.go         # Tokyo Night palette, StatusColor, StatusDot, RepoColor
     ├── screens/
@@ -106,8 +108,11 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 ## Key Patterns
 
 - **Bubbletea v2 Elm architecture:** Model-Update-View pattern. `View()` returns `tea.View` (not string). `tea.NewView(str)` with `.AltScreen = true`.
+- **App wiring:** `internal/app/app.go` owns config, GitHub client, DB, poller, and all screen models. Separate from `internal/ui/` to avoid circular imports (screens import `ui` for theme).
 - **Multi-repo config:** `.cimon.yml` v2 uses `repos` list. v1 `repo` key auto-migrates.
 - **Poller→TUI communication:** Channel + `tea.Cmd` pattern (goroutine sends to channel, tea.Cmd reads from channel). Avoids `p.Send()` deadlock.
+- **Poll result handling:** Each PollResult persists runs/PRs to DB, rebuilds all screen data (pipeline, review queue, agent profiles, timeline, release confidence, metrics), then re-subscribes to the channel.
+- **Two-bar layout:** Fixed top bar (screen tabs) + fixed bottom bar (status). Content truncated to fit between them.
 - **ETag caching:** `sync.Map` keyed by URL path. Conditional requests with `If-None-Match`. 304s return cached body.
 - **Pure Go SQLite:** `modernc.org/sqlite` (no CGO). Dual connections: writer (MaxOpenConns=1) + reader pool (MaxOpenConns=4). WAL mode.
 - **Process group isolation:** Agent subprocesses get `Setpgid: true`. Kill with `syscall.Kill(-pid, SIGTERM)`.

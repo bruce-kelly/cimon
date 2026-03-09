@@ -6,17 +6,21 @@ All rendering uses lipgloss-styled strings composed in Bubbletea models. Screens
 
 ---
 
-## App Root (`internal/ui/app.go`)
+## App Root (`internal/app/app.go`)
 
-`App` is the root Bubbletea model. It orchestrates screens, key dispatch, and window sizing.
+`App` is the root Bubbletea model. It wires the poller, DB, and GitHub client to screen models. Lives in `internal/app/` (separate from `internal/ui/`) to avoid circular imports — screens import `ui` for theme colors.
 
-**Screen switching:** Dashboard (`1`), Timeline (`2`), Release (`3`), Metrics (`4`). Stored as `Screen` enum.
+**Startup:** `main.go` loads config, discovers token, opens DB, passes all to `app.NewApp()`. App creates poller, builds config-derived lookups (release/agent workflow maps), initializes screen models.
 
-**View rendering:** `View()` returns `tea.View` (not string). Uses `tea.NewView(rendered)` with `v.AltScreen = true`.
+**Poll handling:** Each `PollResult` persists runs/PRs to DB via `UpsertRun`/`UpsertPull`, then `rebuildScreenData()` updates all screens: pipeline runs, review queue, agent profiles, timeline, release confidence, metrics stats.
 
-**Key dispatch:** `Update()` handles `tea.KeyPressMsg` via `key.Matches()` against `KeyMap`.
+**Screen switching:** Dashboard (`1`), Timeline (`2`), Release (`3`), Metrics (`4`). Stored as `ui.Screen` enum (defined in `internal/ui/app.go`).
 
-**Status bar:** Bottom bar with screen indicators. Active screen highlighted in accent color.
+**View rendering:** `View()` returns `tea.View` with `v.AltScreen = true`. Two-bar layout: fixed top bar (screen tabs) + fixed bottom bar (status). Content truncated to fit between them.
+
+**Key dispatch:** `Update()` handles `tea.KeyPressMsg` via `key.Matches()` against `ui.Keys`. Filter mode intercepts when active. Screen-specific handlers for dashboard (Tab focus, j/k per panel), timeline (j/k), release (left/right repo switch).
+
+**Status bar:** Bottom bar shows run count, active count, rate limit remaining, poll cadence.
 
 ---
 
