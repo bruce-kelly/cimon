@@ -112,8 +112,12 @@ func (d *Database) QueryRuns(repo string, limit int) ([]models.WorkflowRun, erro
 			r.HTMLURL = *htmlURL
 		}
 
-		r.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-		r.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		if t, err := time.Parse(time.RFC3339, createdStr); err == nil {
+			r.CreatedAt = t
+		}
+		if t, err := time.Parse(time.RFC3339, updatedStr); err == nil {
+			r.UpdatedAt = t
+		}
 
 		runs = append(runs, r)
 	}
@@ -169,8 +173,12 @@ func (d *Database) QueryAllRuns(limit int) ([]models.WorkflowRun, error) {
 			r.HTMLURL = *htmlURL
 		}
 
-		r.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-		r.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+		if t, err := time.Parse(time.RFC3339, createdStr); err == nil {
+			r.CreatedAt = t
+		}
+		if t, err := time.Parse(time.RFC3339, updatedStr); err == nil {
+			r.UpdatedAt = t
+		}
 
 		runs = append(runs, r)
 	}

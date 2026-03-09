@@ -65,7 +65,7 @@ var dbExportCmd = &cobra.Command{
 
 		runs, err := database.QueryAllRuns(1000)
 		if err != nil {
-			return err
+			return fmt.Errorf("querying runs: %w", err)
 		}
 		data := map[string]any{
 			"runs": runs,
@@ -105,6 +105,9 @@ func init() {
 }
 
 func defaultDBPath() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".local/share/cimon/cimon.db"
+	}
 	return home + "/.local/share/cimon/cimon.db"
 }

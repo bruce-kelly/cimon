@@ -93,9 +93,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Println("✓ .cimon.yml written")
 	}
 
+	_ = cfg // config built for future validation use
+
 	fmt.Println()
 	fmt.Printf("Run `cimon` to start monitoring %s\n", repo)
-	_ = cfg // used for validation
 	return nil
 }
 
