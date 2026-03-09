@@ -30,6 +30,7 @@ type DashboardModel struct {
 	Focus         FocusArea
 	ReviewSel     components.Selector
 	RosterSel     components.Selector
+	ShowRoster    bool
 	Width         int
 	Height        int
 }
@@ -47,6 +48,10 @@ func (d *DashboardModel) SetSize(w, h int) {
 
 func (d *DashboardModel) CycleFocus() {
 	d.Focus = (d.Focus + 1) % 3
+	// Skip roster panel if no agent workflows configured
+	if d.Focus == FocusRoster && !d.ShowRoster {
+		d.Focus = FocusPipeline
+	}
 }
 
 func (d *DashboardModel) Render() string {

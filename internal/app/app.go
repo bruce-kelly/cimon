@@ -37,6 +37,9 @@ type pollErrorMsg struct {
 	Err error
 }
 
+// agentTickMsg fires periodically to check scheduled tasks and agent lifetimes.
+type agentTickMsg struct{}
+
 // App is the root Bubbletea model wired to poller, DB, and screen models.
 type App struct {
 	// Infrastructure
@@ -73,6 +76,17 @@ type App struct {
 	releaseWorkflows map[string]map[string]bool // repo → release workflow files
 	agentWorkflows   map[string]map[string]bool // repo → agent workflow files
 
+	// Agent infrastructure
+	dispatcher *agents.Dispatcher
+	scheduler  *agents.Scheduler
+	autoFix    *agents.AutoFixTracker
+
+	// Catchup overlay
+	catchup      components.CatchupOverlay
+	lastInput    time.Time
+	preIdleRuns  int
+	preIdlePulls int
+
 	// UI state
 	width      int
 	height     int
@@ -80,6 +94,7 @@ type App struct {
 	statusText string
 	rateLimit  int
 	lastPoll   time.Time
+	dbErrors   int
 }
 
 // NewApp creates a fully wired App ready to run.
@@ -125,8 +140,47 @@ func NewApp(cfg *config.CimonConfig, client *ghclient.Client, database *db.Datab
 		dismissed = make(map[string]bool)
 	}
 
+	// Agent infrastructure
+	maxConcurrent := cfg.Agents.MaxConcurrent
+	if maxConcurrent == 0 {
+		maxConcurrent = 2
+	}
+	maxLifetime := cfg.Agents.MaxLifetime
+	if maxLifetime == 0 {
+		maxLifetime = 1800
+	}
+	dispatcher := agents.NewDispatcher(maxConcurrent, maxLifetime, cfg.Agents.CaptureOutput)
+
+	var scheduler *agents.Scheduler
+	if len(cfg.Agents.Scheduled) > 0 {
+		scheduler = agents.NewScheduler(cfg.Agents.Scheduled)
+	}
+
+	autoFix := agents.NewAutoFixTracker(maxConcurrent)
+	for _, repo := range cfg.Repos {
+		for groupName, group := range repo.Groups {
+			if group.AutoFix {
+				cooldown := group.AutoFixCooldown
+				if cooldown == 0 {
+					cooldown = 300
+				}
+				autoFix.SetCooldown(repo.Repo, groupName, cooldown)
+			}
+		}
+	}
+
+	// Check for agent workflows to show roster
+	hasAgents := false
+	for _, wfs := range agentWorkflows {
+		if len(wfs) > 0 {
+			hasAgents = true
+			break
+		}
+	}
+
 	dashboard := screens.NewDashboard()
 	dashboard.Pipeline.ExpandJobs = expandJobs
+	dashboard.ShowRoster = hasAgents
 
 	release := screens.NewRelease()
 	release.Repos = releaseRepos
@@ -149,6 +203,10 @@ func NewApp(cfg *config.CimonConfig, client *ghclient.Client, database *db.Datab
 		releaseWorkflows: releaseWorkflows,
 		agentWorkflows:   agentWorkflows,
 		dismissed:        dismissed,
+		dispatcher:       dispatcher,
+		scheduler:        scheduler,
+		autoFix:          autoFix,
+		lastInput:        time.Now(),
 		statusText:       "cimon — connecting...",
 	}
 }
@@ -165,7 +223,17 @@ func isAgentGroup(label string) bool {
 
 func (a App) Init() tea.Cmd {
 	a.poller.Start(a.ctx)
-	return waitForPoll(a.resultCh)
+	cmds := []tea.Cmd{waitForPoll(a.resultCh)}
+	if a.scheduler != nil || a.dispatcher != nil {
+		cmds = append(cmds, agentTick())
+	}
+	return tea.Batch(cmds...)
+}
+
+func agentTick() tea.Cmd {
+	return tea.Tick(10*time.Second, func(t time.Time) tea.Msg {
+		return agentTickMsg{}
+	})
 }
 
 // waitForPoll returns a tea.Cmd that blocks until a PollResult arrives.
@@ -187,6 +255,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollErrorMsg:
 		a.statusText = fmt.Sprintf("Poll error: %v", msg.Err)
 		return a, nil
+
+	case agentTickMsg:
+		// Check scheduled tasks
+		if a.scheduler != nil && a.dispatcher != nil {
+			for _, task := range a.scheduler.DueTasks(time.Now()) {
+				repo := task.Config.Repo
+				prompt := task.Config.Prompt
+				if prompt == "" {
+					wf := task.Config.Workflow
+					go func(r, w string) {
+						if err := a.client.DispatchWorkflow(a.ctx, r, w, "main"); err != nil {
+							slog.Error("scheduled dispatch failed", "name", task.Config.Name, "err", err)
+						}
+					}(repo, wf)
+				} else {
+					go func(r, p string) {
+						if _, err := a.dispatcher.Dispatch(r, p); err != nil {
+							slog.Error("scheduled agent dispatch failed", "name", task.Config.Name, "err", err)
+						}
+					}(repo, prompt)
+				}
+			}
+		}
+		// Check agent lifetimes
+		if a.dispatcher != nil {
+			a.dispatcher.CheckAll()
+			a.dashboard.Dispatched = a.dispatcher.AllAgents()
+		}
+		return a, agentTick()
 
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
@@ -245,18 +342,107 @@ func (a App) handlePollResult(msg pollResultMsg) (tea.Model, tea.Cmd) {
 	a.rateLimit = msg.Result.RateLimitRemaining
 
 	// Persist to DB
+	dbFailed := false
 	for _, run := range msg.Result.Runs {
 		if err := a.db.UpsertRun(run); err != nil {
 			slog.Error("upsert run", "err", err)
+			dbFailed = true
 		}
 	}
 	for _, pr := range msg.Result.PullRequests {
 		if err := a.db.UpsertPull(pr); err != nil {
 			slog.Error("upsert pull", "err", err)
+			dbFailed = true
+		}
+	}
+	if dbFailed {
+		a.dbErrors++
+		if a.dbErrors >= 3 {
+			a.flash.Show("DB writes failing — data not persisted", true)
+		}
+	} else {
+		a.dbErrors = 0
+	}
+
+	// Auto-fix evaluation
+	if a.autoFix != nil && a.dispatcher != nil {
+		for _, run := range msg.Result.Runs {
+			if run.Conclusion != "failure" {
+				continue
+			}
+			repoConfig := a.findRepoConfig(run.Repo)
+			if repoConfig == nil {
+				continue
+			}
+			autoFixEnabled := false
+			wfKey := ""
+			for _, group := range repoConfig.Groups {
+				for _, wf := range group.Workflows {
+					if wf == run.WorkflowFile && group.AutoFix {
+						autoFixEnabled = true
+						wfKey = wf
+					}
+				}
+			}
+			if !autoFixEnabled {
+				continue
+			}
+
+			var failedJobs []models.Job
+			for _, j := range run.Jobs {
+				if j.Conclusion == "failure" {
+					failedJobs = append(failedJobs, j)
+				}
+			}
+
+			isKnown := func(repo, jobName string) bool {
+				known, err := a.db.IsKnownFailure(repo, jobName, 48)
+				if err != nil {
+					slog.Error("checking known failure", "err", err)
+					return false
+				}
+				return known
+			}
+			decision := a.autoFix.Evaluate(
+				run.Repo, wfKey, failedJobs,
+				len(a.dispatcher.RunningAgents()),
+				isKnown,
+			)
+			if decision.ShouldDispatch {
+				prompt := agents.BuildFixPrompt(decision.Repo, decision.WorkflowFile, decision.FailingJobs)
+				go func(r, p string) {
+					id, err := a.dispatcher.Dispatch(r, p)
+					if err != nil {
+						slog.Error("auto-fix dispatch failed", "repo", r, "err", err)
+					} else {
+						slog.Info("auto-fix dispatched", "repo", r, "agent", id)
+						a.flash.Show("Auto-fix agent dispatched", false)
+					}
+				}(decision.Repo, prompt)
+			}
 		}
 	}
 
 	a.rebuildScreenData()
+
+	// Feed dispatched agents to dashboard
+	if a.dispatcher != nil {
+		a.dashboard.Dispatched = a.dispatcher.AllAgents()
+	}
+
+	// Snapshot for catchup detection
+	totalRunsForSnapshot := 0
+	for _, runs := range a.allRuns {
+		totalRunsForSnapshot += len(runs)
+	}
+	totalPullsForSnapshot := 0
+	for _, pulls := range a.allPulls {
+		totalPullsForSnapshot += len(pulls)
+	}
+	if time.Since(a.lastInput) < 60*time.Second {
+		a.preIdleRuns = totalRunsForSnapshot
+		a.preIdlePulls = totalPullsForSnapshot
+	}
 
 	// Update status bar
 	totalRuns := 0
@@ -369,6 +555,42 @@ func (a *App) rebuildScreenData() {
 }
 
 func (a App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	now := time.Now()
+
+	// Catchup overlay — dismiss on any key
+	if a.catchup.Visible {
+		a.catchup.Dismiss()
+		a.lastInput = now
+		return a, nil
+	}
+
+	// Check if returning from idle
+	if a.config.Catchup.Enabled {
+		threshold := time.Duration(a.config.Catchup.IdleThreshold) * time.Second
+		if threshold == 0 {
+			threshold = 15 * time.Minute
+		}
+		if now.Sub(a.lastInput) > threshold {
+			totalRuns := 0
+			totalPulls := 0
+			for _, runs := range a.allRuns {
+				totalRuns += len(runs)
+			}
+			for _, pulls := range a.allPulls {
+				totalPulls += len(pulls)
+			}
+			newRuns := totalRuns - a.preIdleRuns
+			changedPRs := totalPulls - a.preIdlePulls
+			if newRuns > 0 || changedPRs > 0 {
+				a.catchup.Show(newRuns, 0, changedPRs)
+				a.lastInput = now
+				return a, nil
+			}
+		}
+	}
+
+	a.lastInput = now
+
 	// Help overlay intercepts all keys when visible
 	if a.help.Visible {
 		a.help.Toggle()
@@ -397,6 +619,9 @@ func (a App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, ui.Keys.Quit):
 		a.quitting = true
+		if a.dispatcher != nil {
+			a.dispatcher.Shutdown()
+		}
 		a.poller.Stop()
 		a.cancel()
 		return a, tea.Quit
@@ -632,6 +857,28 @@ func (a App) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case key.Matches(msg, ui.Keys.Dispatch):
+		if a.dashboard.Focus == screens.FocusPipeline && a.dispatcher != nil {
+			if run := a.dashboard.Pipeline.SelectedRun(); run != nil && run.Conclusion == "failure" {
+				runCopy := *run
+				prompt := fmt.Sprintf("Fix the failing CI in %s. The workflow %s failed.", runCopy.Repo, runCopy.Name)
+				a.confirmBar.Show(
+					fmt.Sprintf("Dispatch fix agent for %s?", runCopy.Name),
+					func() {
+						go func() {
+							id, err := a.dispatcher.Dispatch(runCopy.Repo, prompt)
+							if err != nil {
+								a.flash.Show("Dispatch failed: "+err.Error(), true)
+							} else {
+								a.flash.Show(fmt.Sprintf("Agent dispatched: %s", id), false)
+							}
+						}()
+					},
+					func() {},
+				)
+			}
+		}
+
 	case key.Matches(msg, ui.Keys.Enter):
 		var items []components.ActionMenuItem
 
@@ -842,6 +1089,15 @@ func (a App) View() tea.View {
 		content = a.metrics.Render()
 	}
 
+	// Catchup overlay replaces content
+	if a.catchup.Visible {
+		contentHeight := a.height - 2
+		if contentHeight < 0 {
+			contentHeight = 0
+		}
+		content = a.catchup.Render(a.width, contentHeight)
+	}
+
 	// Help overlay replaces content
 	if a.help.Visible {
 		content = a.help.Render(a.screen.String(), a.width, a.height)
@@ -900,6 +1156,15 @@ func (a App) View() tea.View {
 	v := tea.NewView(rendered)
 	v.AltScreen = true
 	return v
+}
+
+func (a App) findRepoConfig(repo string) *config.RepoConfig {
+	for i := range a.config.Repos {
+		if a.config.Repos[i].Repo == repo {
+			return &a.config.Repos[i]
+		}
+	}
+	return nil
 }
 
 func openBrowser(url string) {

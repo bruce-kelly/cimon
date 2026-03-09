@@ -16,14 +16,26 @@ func TestNewDashboard_HasPipelineView(t *testing.T) {
 }
 
 func TestDashboardModel_CycleFocus(t *testing.T) {
-	d := NewDashboard()
-	assert.Equal(t, FocusPipeline, d.Focus)
-	d.CycleFocus()
-	assert.Equal(t, FocusReview, d.Focus)
-	d.CycleFocus()
-	assert.Equal(t, FocusRoster, d.Focus)
-	d.CycleFocus()
-	assert.Equal(t, FocusPipeline, d.Focus) // wraps
+	t.Run("with roster", func(t *testing.T) {
+		d := NewDashboard()
+		d.ShowRoster = true
+		assert.Equal(t, FocusPipeline, d.Focus)
+		d.CycleFocus()
+		assert.Equal(t, FocusReview, d.Focus)
+		d.CycleFocus()
+		assert.Equal(t, FocusRoster, d.Focus)
+		d.CycleFocus()
+		assert.Equal(t, FocusPipeline, d.Focus) // wraps
+	})
+
+	t.Run("without roster", func(t *testing.T) {
+		d := NewDashboard()
+		assert.Equal(t, FocusPipeline, d.Focus)
+		d.CycleFocus()
+		assert.Equal(t, FocusReview, d.Focus)
+		d.CycleFocus()
+		assert.Equal(t, FocusPipeline, d.Focus) // skips roster, wraps
+	})
 }
 
 func TestDashboardModel_SetSize(t *testing.T) {
