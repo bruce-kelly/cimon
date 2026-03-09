@@ -59,16 +59,20 @@ func (d *DashboardModel) Render() string {
 		return ""
 	}
 
-	// Three-panel layout: pipeline (left), review queue (center), agent roster (right)
-	panelWidth := d.Width / 3
-	if panelWidth < 20 {
-		panelWidth = d.Width // single column fallback
-	}
-
 	// Panel headers
 	headerStyle := lipgloss.NewStyle().
 		Foreground(ui.ColorAccent).
 		Bold(true)
+
+	panelCount := 2
+	if d.ShowRoster {
+		panelCount = 3
+	}
+
+	panelWidth := d.Width / panelCount
+	if panelWidth < 20 {
+		panelWidth = d.Width // single column fallback
+	}
 
 	// Pipeline panel
 	pipeHeader := headerStyle.Render("Pipeline")
@@ -78,34 +82,45 @@ func (d *DashboardModel) Render() string {
 	pipeContent := d.Pipeline.Render(panelWidth)
 
 	// Review queue panel
+	reviewWidth := panelWidth
+	if !d.ShowRoster && panelWidth != d.Width {
+		reviewWidth = d.Width - panelWidth // give remaining space to review
+	}
 	reviewHeader := headerStyle.Render("Review Queue")
 	if d.Focus == FocusReview {
 		reviewHeader = headerStyle.Render("[Review Queue]")
 	}
-	reviewContent := d.renderReviewQueue(panelWidth)
-
-	// Agent roster panel
-	rosterHeader := headerStyle.Render("Agent Roster")
-	if d.Focus == FocusRoster {
-		rosterHeader = headerStyle.Render("[Agent Roster]")
-	}
-	rosterContent := d.renderAgentRoster(panelWidth)
+	reviewContent := d.renderReviewQueue(reviewWidth)
 
 	if panelWidth == d.Width {
 		// Single column
-		return strings.Join([]string{
+		lines := []string{
 			pipeHeader, pipeContent, "",
-			reviewHeader, reviewContent, "",
-			rosterHeader, rosterContent,
-		}, "\n")
+			reviewHeader, reviewContent,
+		}
+		if d.ShowRoster {
+			rosterHeader := headerStyle.Render("Agent Roster")
+			if d.Focus == FocusRoster {
+				rosterHeader = headerStyle.Render("[Agent Roster]")
+			}
+			lines = append(lines, "", rosterHeader, d.renderAgentRoster(panelWidth))
+		}
+		return strings.Join(lines, "\n")
 	}
 
-	// Three columns
 	leftPanel := lipgloss.NewStyle().Width(panelWidth).Render(pipeHeader + "\n" + pipeContent)
-	centerPanel := lipgloss.NewStyle().Width(panelWidth).Render(reviewHeader + "\n" + reviewContent)
-	rightPanel := lipgloss.NewStyle().Width(panelWidth).Render(rosterHeader + "\n" + rosterContent)
+	centerPanel := lipgloss.NewStyle().Width(reviewWidth).Render(reviewHeader + "\n" + reviewContent)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, centerPanel, rightPanel)
+	if d.ShowRoster {
+		rosterHeader := headerStyle.Render("Agent Roster")
+		if d.Focus == FocusRoster {
+			rosterHeader = headerStyle.Render("[Agent Roster]")
+		}
+		rightPanel := lipgloss.NewStyle().Width(panelWidth).Render(rosterHeader + "\n" + d.renderAgentRoster(panelWidth))
+		return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, centerPanel, rightPanel)
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, centerPanel)
 }
 
 func (d *DashboardModel) renderReviewQueue(width int) string {

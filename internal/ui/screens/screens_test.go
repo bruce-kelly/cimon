@@ -51,14 +51,26 @@ func TestDashboardModel_RenderZeroWidth(t *testing.T) {
 }
 
 func TestDashboardModel_RenderEmptyState(t *testing.T) {
-	d := NewDashboard()
-	d.SetSize(120, 40)
-	rendered := d.Render()
-	assert.Contains(t, rendered, "Pipeline")
-	assert.Contains(t, rendered, "Review Queue")
-	assert.Contains(t, rendered, "Agent Roster")
-	assert.Contains(t, rendered, "No items for review")
-	assert.Contains(t, rendered, "No agent activity")
+	t.Run("with roster", func(t *testing.T) {
+		d := NewDashboard()
+		d.ShowRoster = true
+		d.SetSize(120, 40)
+		rendered := d.Render()
+		assert.Contains(t, rendered, "Pipeline")
+		assert.Contains(t, rendered, "Review Queue")
+		assert.Contains(t, rendered, "Agent Roster")
+		assert.Contains(t, rendered, "No items for review")
+		assert.Contains(t, rendered, "No agent activity")
+	})
+
+	t.Run("without roster", func(t *testing.T) {
+		d := NewDashboard()
+		d.SetSize(120, 40)
+		rendered := d.Render()
+		assert.Contains(t, rendered, "Pipeline")
+		assert.Contains(t, rendered, "Review Queue")
+		assert.NotContains(t, rendered, "Agent Roster")
+	})
 }
 
 func TestTimelineModel_SetRunsSortsByUpdatedAt(t *testing.T) {

@@ -1034,6 +1034,13 @@ func (a App) View() tea.View {
 		return tea.NewView("")
 	}
 
+	if a.width < 60 || a.height < 10 {
+		msg := fmt.Sprintf("Terminal too small: %d×%d\nMinimum: 60×10\nPlease resize.", a.width, a.height)
+		v := tea.NewView(msg)
+		v.AltScreen = true
+		return v
+	}
+
 	barStyle := lipgloss.NewStyle().
 		Background(ui.ColorSurface).
 		Foreground(ui.ColorMuted).

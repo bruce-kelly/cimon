@@ -185,14 +185,52 @@ func (d *Dispatcher) CheckAll() {
 	}
 }
 
-// Shutdown terminates all running agents.
+// Shutdown terminates all running agents with SIGTERM, then SIGKILL after 5s.
 func (d *Dispatcher) Shutdown() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	var running []*DispatchedAgent
 	for _, agent := range d.agents {
 		if agent.Status == "running" {
-			syscall.Kill(-agent.PID, syscall.SIGTERM)
+			running = append(running, agent)
+		}
+	}
+	d.mu.Unlock()
+
+	if len(running) == 0 {
+		return
+	}
+
+	// Send SIGTERM to all running agents
+	for _, agent := range running {
+		syscall.Kill(-agent.PID, syscall.SIGTERM)
+	}
+
+	// Wait up to 5 seconds for graceful exit, then SIGKILL
+	deadline := time.After(5 * time.Second)
+	for _, agent := range running {
+		if agent.cmd == nil {
+			// No process to wait on (e.g. test stub)
+			d.mu.Lock()
 			agent.Status = "killed"
+			d.mu.Unlock()
+			continue
+		}
+		done := make(chan struct{})
+		go func(a *DispatchedAgent) {
+			a.cmd.Wait()
+			close(done)
+		}(agent)
+
+		select {
+		case <-done:
+			d.mu.Lock()
+			agent.Status = "killed"
+			d.mu.Unlock()
+		case <-deadline:
+			syscall.Kill(-agent.PID, syscall.SIGKILL)
+			d.mu.Lock()
+			agent.Status = "killed"
+			d.mu.Unlock()
 		}
 	}
 }
