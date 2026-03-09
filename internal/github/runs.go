@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/bruce-kelly/cimon/internal/models"
@@ -88,8 +89,16 @@ type ghActor struct {
 }
 
 func (r ghRun) toModel(repo string) models.WorkflowRun {
-	created, _ := time.Parse(time.RFC3339, r.CreatedAt)
-	updated, _ := time.Parse(time.RFC3339, r.UpdatedAt)
+	created, err := time.Parse(time.RFC3339, r.CreatedAt)
+	if err != nil {
+		slog.Warn("failed to parse run created_at", "value", r.CreatedAt, "err", err)
+		created = time.Now()
+	}
+	updated, err := time.Parse(time.RFC3339, r.UpdatedAt)
+	if err != nil {
+		slog.Warn("failed to parse run updated_at", "value", r.UpdatedAt, "err", err)
+		updated = time.Now()
+	}
 	conclusion := ""
 	if r.Conclusion != nil {
 		conclusion = *r.Conclusion

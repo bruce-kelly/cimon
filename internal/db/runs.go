@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/bruce-kelly/cimon/internal/models"
@@ -250,5 +251,11 @@ func (d *Database) PruneRuns(retentionDays int) (int64, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing prune: %w", err)
 	}
+
+	// Reclaim WAL space after bulk delete
+	if _, err := d.writer.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		slog.Warn("WAL checkpoint after prune failed", "err", err)
+	}
+
 	return count, nil
 }

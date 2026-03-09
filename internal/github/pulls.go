@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -139,8 +140,16 @@ type ghPull struct {
 }
 
 func (p ghPull) toModel(repo string) models.PullRequest {
-	created, _ := time.Parse(time.RFC3339, p.CreatedAt)
-	updated, _ := time.Parse(time.RFC3339, p.UpdatedAt)
+	created, err := time.Parse(time.RFC3339, p.CreatedAt)
+	if err != nil {
+		slog.Warn("failed to parse PR created_at", "value", p.CreatedAt, "err", err)
+		created = time.Now()
+	}
+	updated, err := time.Parse(time.RFC3339, p.UpdatedAt)
+	if err != nil {
+		slog.Warn("failed to parse PR updated_at", "value", p.UpdatedAt, "err", err)
+		updated = time.Now()
+	}
 	return models.PullRequest{
 		Number:    p.Number,
 		Title:     p.Title,

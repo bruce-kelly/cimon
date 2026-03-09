@@ -54,7 +54,9 @@ type App struct {
 	metrics   screens.MetricsModel
 
 	// Overlays
-	help components.HelpOverlay
+	help       components.HelpOverlay
+	flash      components.Flash
+	confirmBar components.ConfirmBar
 
 	// Per-repo latest poll data
 	allRuns  map[string][]models.WorkflowRun
@@ -186,6 +188,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case tea.KeyPressMsg:
+		// ConfirmBar intercepts all keys when active
+		if a.confirmBar.Active {
+			handled := a.confirmBar.HandleKey(msg.String())
+			if handled {
+				return a, nil
+			}
+		}
 		return a.handleKey(msg)
 	}
 
@@ -494,8 +503,20 @@ func (a App) View() tea.View {
 	}
 	topBar := barStyle.Render(screenIndicator)
 
-	// Bottom bar: status text
-	bottomBar := barStyle.Render(a.statusText)
+	// Bottom bar: confirmBar > flash > status
+	var bottomContent string
+	if a.confirmBar.Active {
+		bottomContent = a.confirmBar.Render(a.width)
+	} else if a.flash.Visible() {
+		if a.flash.IsError {
+			bottomContent = lipgloss.NewStyle().Foreground(ui.ColorRed).Width(a.width).Padding(0, 1).Render(a.flash.Message)
+		} else {
+			bottomContent = lipgloss.NewStyle().Foreground(ui.ColorGreen).Width(a.width).Padding(0, 1).Render(a.flash.Message)
+		}
+	} else {
+		bottomContent = a.statusText
+	}
+	bottomBar := barStyle.Render(bottomContent)
 
 	// Screen content
 	var content string

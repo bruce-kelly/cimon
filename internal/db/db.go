@@ -45,6 +45,12 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
+	// Force WAL checkpoint so reader sees schema
+	if _, err := writer.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		writer.Close()
+		return nil, fmt.Errorf("wal checkpoint: %w", err)
+	}
+
 	reader, err := sql.Open("sqlite", path+"?mode=ro")
 	if err != nil {
 		writer.Close()
