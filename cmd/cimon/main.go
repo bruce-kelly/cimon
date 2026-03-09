@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+
+	"github.com/bruce-kelly/cimon/internal/ui"
 )
 
 // Set by goreleaser ldflags.
@@ -14,7 +17,11 @@ var rootCmd = &cobra.Command{
 	Use:   "cimon",
 	Short: "CI Monitor — GitHub Actions cockpit for your terminal",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Printf("cimon %s\n", version)
+		app := ui.NewApp()
+		p := tea.NewProgram(app)
+		if _, err := p.Run(); err != nil {
+			return fmt.Errorf("TUI error: %w", err)
+		}
 		return nil
 	},
 }
