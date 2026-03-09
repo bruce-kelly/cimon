@@ -448,3 +448,45 @@ func TestFormatDuration_Hours(t *testing.T) {
 func TestFormatDuration_Zero(t *testing.T) {
 	assert.Equal(t, "0s", FormatDuration(0))
 }
+
+// --- FormatTimeAgo ---
+
+func TestFormatTimeAgo_Now(t *testing.T) {
+	assert.Equal(t, "now", FormatTimeAgo(time.Now()))
+}
+
+func TestFormatTimeAgo_Seconds(t *testing.T) {
+	assert.Equal(t, "now", FormatTimeAgo(time.Now().Add(-30*time.Second)))
+}
+
+func TestFormatTimeAgo_Minutes(t *testing.T) {
+	assert.Equal(t, "3m ago", FormatTimeAgo(time.Now().Add(-3*time.Minute)))
+}
+
+func TestFormatTimeAgo_OneMinute(t *testing.T) {
+	assert.Equal(t, "1m ago", FormatTimeAgo(time.Now().Add(-1*time.Minute)))
+}
+
+func TestFormatTimeAgo_Hours(t *testing.T) {
+	assert.Equal(t, "2h ago", FormatTimeAgo(time.Now().Add(-2*time.Hour)))
+}
+
+func TestFormatTimeAgo_OneHour(t *testing.T) {
+	assert.Equal(t, "1h ago", FormatTimeAgo(time.Now().Add(-1*time.Hour)))
+}
+
+func TestFormatTimeAgo_Days(t *testing.T) {
+	assert.Equal(t, "3d ago", FormatTimeAgo(time.Now().Add(-3*24*time.Hour)))
+}
+
+func TestFormatTimeAgo_Weeks(t *testing.T) {
+	assert.Equal(t, "2w ago", FormatTimeAgo(time.Now().Add(-14*24*time.Hour)))
+}
+
+func TestFormatTimeAgo_Months(t *testing.T) {
+	assert.Equal(t, "2mo ago", FormatTimeAgo(time.Now().Add(-60*24*time.Hour)))
+}
+
+func TestFormatTimeAgo_ZeroTime(t *testing.T) {
+	assert.Equal(t, "", FormatTimeAgo(time.Time{}))
+}
