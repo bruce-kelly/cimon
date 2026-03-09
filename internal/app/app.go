@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -27,6 +28,11 @@ import (
 // pollResultMsg wraps a PollResult from the poller goroutine.
 type pollResultMsg struct {
 	Result models.PollResult
+}
+
+// pollErrorMsg indicates the poll channel was closed.
+type pollErrorMsg struct {
+	Err error
 }
 
 // App is the root Bubbletea model wired to poller, DB, and screen models.
@@ -151,7 +157,7 @@ func waitForPoll(ch <-chan models.PollResult) tea.Cmd {
 	return func() tea.Msg {
 		result, ok := <-ch
 		if !ok {
-			return nil
+			return pollErrorMsg{Err: fmt.Errorf("poll channel closed")}
 		}
 		return pollResultMsg{Result: result}
 	}
@@ -161,6 +167,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case pollResultMsg:
 		return a.handlePollResult(msg)
+
+	case pollErrorMsg:
+		a.statusText = fmt.Sprintf("Poll error: %v", msg.Err)
+		return a, nil
 
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
@@ -183,6 +193,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) handlePollResult(msg pollResultMsg) (tea.Model, tea.Cmd) {
+	// Check for classified errors
+	if msg.Result.Error != nil {
+		var authErr *ghclient.AuthError
+		var rlErr *ghclient.RateLimitError
+		switch {
+		case errors.As(msg.Result.Error, &authErr):
+			a.statusText = "AUTH FAILED — token expired or revoked. Restart with valid token."
+			return a, waitForPoll(a.resultCh)
+		case errors.As(msg.Result.Error, &rlErr):
+			a.statusText = fmt.Sprintf("Rate limited — retrying at %s",
+				rlErr.ResetAt.Format("15:04:05"))
+			return a, waitForPoll(a.resultCh)
+		}
+	}
+
 	repo := msg.Result.Repo
 	a.allRuns[repo] = msg.Result.Runs
 	a.allPulls[repo] = msg.Result.PullRequests
@@ -342,8 +367,8 @@ func (a App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, ui.Keys.Quit):
 		a.quitting = true
-		a.cancel()
 		a.poller.Stop()
+		a.cancel()
 		return a, tea.Quit
 
 	case key.Matches(msg, ui.Keys.Help):

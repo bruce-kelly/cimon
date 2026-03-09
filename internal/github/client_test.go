@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +108,57 @@ func TestErrorHandling403(t *testing.T) {
 
 	_, _, err := client.get(ctx, "/repos/owner/repo")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "403")
+
+	var authErr *AuthError
+	assert.True(t, errors.As(err, &authErr))
+	assert.Equal(t, 403, authErr.StatusCode)
+}
+
+func TestClient_Get401ReturnsAuthError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		fmt.Fprint(w, `{"message":"Bad credentials"}`)
+	}))
+	defer srv.Close()
+
+	c := NewTestClient("bad-token", srv.URL)
+	_, _, err := c.get(context.Background(), "/repos/owner/repo")
+	assert.Error(t, err)
+
+	var authErr *AuthError
+	assert.True(t, errors.As(err, &authErr))
+	assert.Equal(t, 401, authErr.StatusCode)
+}
+
+func TestClient_Get429ReturnsRateLimitError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(429)
+		fmt.Fprint(w, `{"message":"rate limit exceeded"}`)
+	}))
+	defer srv.Close()
+
+	c := NewTestClient("token", srv.URL)
+	_, _, err := c.get(context.Background(), "/repos/owner/repo")
+	assert.Error(t, err)
+
+	var rlErr *RateLimitError
+	assert.True(t, errors.As(err, &rlErr))
+	assert.Equal(t, 120*time.Second, rlErr.RetryAfter)
+}
+
+func TestClient_Get429DefaultsRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(429)
+	}))
+	defer srv.Close()
+
+	c := NewTestClient("token", srv.URL)
+	_, _, err := c.get(context.Background(), "/repos/owner/repo")
+
+	var rlErr *RateLimitError
+	assert.True(t, errors.As(err, &rlErr))
+	assert.Equal(t, 60*time.Second, rlErr.RetryAfter)
 }
 
 // ---------- ListRuns parsing ----------

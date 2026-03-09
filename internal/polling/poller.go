@@ -62,6 +62,9 @@ func (p *Poller) loop(ctx context.Context) {
 }
 
 func (p *Poller) pollOnce(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
 	hasActive := false
 	for _, repo := range p.config.Repos {
 		result := p.pollRepo(ctx, &repo)
@@ -87,6 +90,7 @@ func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.P
 			runs, err := p.client.ListRuns(ctx, repo.Repo, wf, repo.Branch)
 			if err != nil {
 				slog.Error("list runs failed", "repo", repo.Repo, "workflow", wf, "err", err)
+				result.Error = err
 				continue
 			}
 			result.Runs = append(result.Runs, runs...)
@@ -96,6 +100,7 @@ func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.P
 	pulls, err := p.client.ListPulls(ctx, repo.Repo)
 	if err != nil {
 		slog.Error("list pulls failed", "repo", repo.Repo, "err", err)
+		result.Error = err
 	} else {
 		for i := range pulls {
 			github.DetectAgent(&pulls[i], repo.AgentPatterns, "")

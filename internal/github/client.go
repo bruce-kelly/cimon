@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -17,8 +18,7 @@ type Client struct {
 	httpClient *http.Client
 	token      string
 	baseURL    string
-	etags      sync.Map // url → etag string
-	cache      sync.Map // url → cached response body ([]byte)
+	etagCache  *etagCache
 	rateLimit  RateLimit
 	mu         sync.RWMutex
 }
@@ -36,6 +36,7 @@ func NewClient(token string) *Client {
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		token:      token,
 		baseURL:    "https://api.github.com",
+		etagCache:  newETagCache(5000),
 	}
 }
 
@@ -45,6 +46,7 @@ func NewTestClient(token, baseURL string) *Client {
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		token:      token,
 		baseURL:    strings.TrimRight(baseURL, "/"),
+		etagCache:  newETagCache(5000),
 	}
 }
 
@@ -65,8 +67,8 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, bool, error) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	if etag, ok := c.etags.Load(url); ok {
-		req.Header.Set("If-None-Match", etag.(string))
+	if etag, ok := c.etagCache.LoadETag(url); ok {
+		req.Header.Set("If-None-Match", etag)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -77,9 +79,10 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, bool, error) {
 	c.trackRateLimit(resp.Header)
 
 	if resp.StatusCode == http.StatusNotModified {
-		if cached, ok := c.cache.Load(url); ok {
-			return cached.([]byte), true, nil
+		if body, ok := c.etagCache.LoadBody(url); ok {
+			return body, true, nil
 		}
+		return nil, false, fmt.Errorf("cache miss on 304 for %s", path)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -87,13 +90,32 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, bool, error) {
 		return nil, false, err
 	}
 
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, false, &AuthError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("GET %s", path),
+		}
+	}
+
+	if resp.StatusCode == 429 {
+		retryAfter := 60 * time.Second
+		if v := resp.Header.Get("Retry-After"); v != "" {
+			if secs, err := strconv.Atoi(v); err == nil {
+				retryAfter = time.Duration(secs) * time.Second
+			}
+		}
+		return nil, false, &RateLimitError{
+			RetryAfter: retryAfter,
+			ResetAt:    time.Now().Add(retryAfter),
+		}
+	}
+
 	if resp.StatusCode >= 400 {
 		return nil, false, fmt.Errorf("GitHub API %d: %s", resp.StatusCode, path)
 	}
 
 	if etag := resp.Header.Get("ETag"); etag != "" {
-		c.etags.Store(url, etag)
-		c.cache.Store(url, body)
+		c.etagCache.Store(url, etag, body)
 	}
 
 	return body, false, nil
@@ -138,6 +160,26 @@ func (c *Client) mutate(ctx context.Context, method, path string, body io.Reader
 		return nil, err
 	}
 
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, &AuthError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("%s %s", method, path),
+		}
+	}
+
+	if resp.StatusCode == 429 {
+		retryAfter := 60 * time.Second
+		if v := resp.Header.Get("Retry-After"); v != "" {
+			if secs, err := strconv.Atoi(v); err == nil {
+				retryAfter = time.Duration(secs) * time.Second
+			}
+		}
+		return nil, &RateLimitError{
+			RetryAfter: retryAfter,
+			ResetAt:    time.Now().Add(retryAfter),
+		}
+	}
+
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("GitHub API %s %d: %s", method, resp.StatusCode, path)
 	}
@@ -149,14 +191,24 @@ func (c *Client) trackRateLimit(h http.Header) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if v := h.Get("X-RateLimit-Remaining"); v != "" {
-		c.rateLimit.Remaining, _ = strconv.Atoi(v)
+		if remaining, err := strconv.Atoi(v); err == nil {
+			c.rateLimit.Remaining = remaining
+		} else {
+			slog.Warn("failed to parse X-RateLimit-Remaining", "value", v, "err", err)
+		}
 	}
 	if v := h.Get("X-RateLimit-Limit"); v != "" {
-		c.rateLimit.Limit, _ = strconv.Atoi(v)
+		if limit, err := strconv.Atoi(v); err == nil {
+			c.rateLimit.Limit = limit
+		} else {
+			slog.Warn("failed to parse X-RateLimit-Limit", "value", v, "err", err)
+		}
 	}
 	if v := h.Get("X-RateLimit-Reset"); v != "" {
 		if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
 			c.rateLimit.ResetAt = time.Unix(ts, 0)
+		} else {
+			slog.Warn("failed to parse X-RateLimit-Reset", "value", v, "err", err)
 		}
 	}
 }
