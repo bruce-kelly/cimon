@@ -34,18 +34,10 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Set up cimon for your repositories",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println("init: not yet implemented")
-		return nil
-	},
-}
-
 func main() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(dbCmd)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

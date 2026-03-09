@@ -120,6 +120,63 @@ func (d *Database) QueryRuns(repo string, limit int) ([]models.WorkflowRun, erro
 	return runs, rows.Err()
 }
 
+// QueryAllRuns returns the most recent workflow runs across all repos.
+func (d *Database) QueryAllRuns(limit int) ([]models.WorkflowRun, error) {
+	rows, err := d.reader.Query(`
+		SELECT id, repo, name, workflow_file, head_branch, head_sha,
+		       status, conclusion, event, actor, created_at, updated_at, html_url
+		FROM workflow_runs
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying all runs: %w", err)
+	}
+	defer rows.Close()
+
+	var runs []models.WorkflowRun
+	for rows.Next() {
+		var r models.WorkflowRun
+		var createdStr, updatedStr string
+		var headBranch, headSHA, status, conclusion, event, actor, htmlURL *string
+
+		if err := rows.Scan(
+			&r.ID, &r.Repo, &r.Name, &r.WorkflowFile,
+			&headBranch, &headSHA, &status, &conclusion,
+			&event, &actor, &createdStr, &updatedStr, &htmlURL,
+		); err != nil {
+			return nil, fmt.Errorf("scanning run: %w", err)
+		}
+
+		if headBranch != nil {
+			r.HeadBranch = *headBranch
+		}
+		if headSHA != nil {
+			r.HeadSHA = *headSHA
+		}
+		if status != nil {
+			r.Status = *status
+		}
+		if conclusion != nil {
+			r.Conclusion = *conclusion
+		}
+		if event != nil {
+			r.Event = *event
+		}
+		if actor != nil {
+			r.Actor = *actor
+		}
+		if htmlURL != nil {
+			r.HTMLURL = *htmlURL
+		}
+
+		r.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+		r.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
 // RunsSince returns the count of runs updated since the given time.
 func (d *Database) RunsSince(repo string, since time.Time) (int, error) {
 	var count int
