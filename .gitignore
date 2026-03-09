@@ -1,0 +1,17 @@
+# Binaries
+/cimon
+*.exe
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage.out

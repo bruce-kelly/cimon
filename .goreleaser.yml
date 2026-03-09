@@ -1,0 +1,26 @@
+version: 2
+project_name: cimon
+builds:
+  - main: ./cmd/cimon
+    binary: cimon
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+brews:
+  - repository:
+      owner: bruce-kelly
+      name: homebrew-tap
+    homepage: https://github.com/bruce-kelly/cimon
+    description: "CI Monitor — GitHub Actions cockpit for your terminal"
+
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+
+changelog:
+  sort: asc
