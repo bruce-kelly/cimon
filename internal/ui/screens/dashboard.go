@@ -160,11 +160,14 @@ func (d *DashboardModel) renderReviewItem(item review.ReviewItem, selected bool,
 		agentBadge = lipgloss.NewStyle().Foreground(ui.ColorPurple).Render(" [agent]")
 	}
 
-	line := fmt.Sprintf(" %s #%d %s%s",
+	age := components.FormatTimeAgo(pr.CreatedAt)
+
+	line := fmt.Sprintf(" %s #%d %s%s  %s",
 		lipgloss.NewStyle().Foreground(ciColor).Render(ciDot),
 		pr.Number,
 		lipgloss.NewStyle().Foreground(escColor).Render(pr.Title),
 		agentBadge,
+		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(age),
 	)
 
 	if selected {
@@ -186,11 +189,14 @@ func (d *DashboardModel) renderAgentRoster(width int) string {
 			outcomeColor = ui.ColorRed
 		}
 
-		line := fmt.Sprintf(" %s %s  %s  %.0f%%",
+		ago := components.FormatTimeAgo(profile.LastRunAt)
+
+		line := fmt.Sprintf(" %s %s  %s  %.0f%%  %s",
 			sparkline,
 			profile.WorkflowFile,
 			lipgloss.NewStyle().Foreground(outcomeColor).Render(profile.LastOutcome.String()),
 			profile.SuccessRate*100,
+			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(ago),
 		)
 
 		if selected {
@@ -217,10 +223,13 @@ func (d *DashboardModel) renderAgentRoster(width int) string {
 				prLink = fmt.Sprintf(" → PR #%d", *agent.PRNumber)
 			}
 
-			line := fmt.Sprintf("  %s %s%s",
+			elapsed := components.FormatTimeAgo(agent.StartedAt)
+
+			line := fmt.Sprintf("  %s %s%s  %s",
 				lipgloss.NewStyle().Foreground(statusColor).Render(agent.Status),
 				agent.Task,
 				lipgloss.NewStyle().Foreground(ui.ColorBlue).Render(prLink),
+				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
 			)
 			sb.WriteString(line + "\n")
 		}

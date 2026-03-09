@@ -75,12 +75,14 @@ func (r *ReleaseModel) Render() string {
 			dot := ui.StatusDot(run.Conclusion)
 			dotColor := ui.StatusColor(run.Conclusion)
 			elapsed := components.FormatDuration(run.Elapsed())
+			ago := components.FormatTimeAgo(run.UpdatedAt)
 
-			line := fmt.Sprintf(" %s %s  %s  %s",
+			line := fmt.Sprintf(" %s %s  %s  %s  %s",
 				lipgloss.NewStyle().Foreground(dotColor).Render(dot),
 				run.Name,
 				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.HeadBranch),
 				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
+				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(ago),
 			)
 
 			// Show jobs if available

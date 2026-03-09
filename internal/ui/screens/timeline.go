@@ -81,8 +81,10 @@ func (t *TimelineModel) Render() string {
 		repoPrefix := lipgloss.NewStyle().Foreground(repoColor).Render(run.Repo)
 
 		elapsed := components.FormatDuration(run.Elapsed())
+		absTime := components.FormatTimeAbsolute(run.UpdatedAt)
 
-		line := fmt.Sprintf(" %s %s %s  %s  %s",
+		line := fmt.Sprintf(" %s  %s %s %s  %s  %s",
+			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(absTime),
 			lipgloss.NewStyle().Foreground(dotColor).Render(dot),
 			repoPrefix,
 			run.Name,

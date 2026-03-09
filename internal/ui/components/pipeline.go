@@ -90,13 +90,15 @@ func (p *PipelineView) renderRun(run models.WorkflowRun, selected bool, width in
 	dotColor := ui.StatusColor(run.Conclusion)
 
 	elapsed := FormatDuration(run.Elapsed())
+	ago := FormatTimeAgo(run.UpdatedAt)
 
-	line := fmt.Sprintf(" %s %s  %s  %s  %s",
+	line := fmt.Sprintf(" %s %s  %s  %s  %s  %s",
 		lipgloss.NewStyle().Foreground(dotColor).Render(dot),
 		run.Name,
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.HeadBranch),
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Actor),
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
+		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(ago),
 	)
 
 	if selected {
