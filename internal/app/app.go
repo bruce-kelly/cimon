@@ -988,7 +988,10 @@ func (a App) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 						Label: "Dismiss", Key: "x",
 						Action: func() {
 							dismissKey := fmt.Sprintf("%s:%d", pr.Repo, pr.Number)
-							a.db.AddDismissed(pr.Repo, pr.Number)
+							if err := a.db.AddDismissed(pr.Repo, pr.Number); err != nil {
+								slog.Error("dismiss failed", "pr", pr.Number, "err", err)
+								return
+							}
 							a.dismissed[dismissKey] = true
 							a.rebuildScreenData()
 						},
