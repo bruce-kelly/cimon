@@ -490,3 +490,37 @@ func TestFormatTimeAgo_Months(t *testing.T) {
 func TestFormatTimeAgo_ZeroTime(t *testing.T) {
 	assert.Equal(t, "", FormatTimeAgo(time.Time{}))
 }
+
+// --- FormatTimeAbsolute ---
+
+func TestFormatTimeAbsolute_Today(t *testing.T) {
+	now := time.Now()
+	ts := time.Date(now.Year(), now.Month(), now.Day(), 14, 23, 0, 0, now.Location())
+	assert.Equal(t, "14:23", FormatTimeAbsolute(ts))
+}
+
+func TestFormatTimeAbsolute_ThisYear(t *testing.T) {
+	now := time.Now()
+	// Pick a date that's definitely not today but in the same year
+	ts := time.Date(now.Year(), 1, 1, 9, 5, 0, 0, now.Location())
+	if now.Month() == 1 && now.Day() == 1 {
+		ts = time.Date(now.Year(), 2, 1, 9, 5, 0, 0, now.Location())
+	}
+	result := FormatTimeAbsolute(ts)
+	assert.Contains(t, result, "09:05")
+	// Check for month abbreviation
+	if now.Month() == 1 && now.Day() == 1 {
+		assert.Contains(t, result, "Feb")
+	} else {
+		assert.Contains(t, result, "Jan")
+	}
+}
+
+func TestFormatTimeAbsolute_OlderYear(t *testing.T) {
+	ts := time.Date(2024, 6, 15, 8, 30, 0, 0, time.Local)
+	assert.Equal(t, "2024-06-15 08:30", FormatTimeAbsolute(ts))
+}
+
+func TestFormatTimeAbsolute_ZeroTime(t *testing.T) {
+	assert.Equal(t, "", FormatTimeAbsolute(time.Time{}))
+}

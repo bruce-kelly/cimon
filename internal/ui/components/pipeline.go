@@ -135,6 +135,23 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
+// FormatTimeAbsolute renders a time as a wall-clock string.
+func FormatTimeAbsolute(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	now := time.Now()
+	y1, m1, d1 := now.Date()
+	y2, m2, d2 := t.Date()
+	if y1 == y2 && m1 == m2 && d1 == d2 {
+		return t.Format("15:04")
+	}
+	if y1 == y2 {
+		return t.Format("Jan 2 15:04")
+	}
+	return t.Format("2006-01-02 15:04")
+}
+
 // FormatTimeAgo renders a time as a relative "ago" string.
 func FormatTimeAgo(t time.Time) string {
 	if t.IsZero() {
