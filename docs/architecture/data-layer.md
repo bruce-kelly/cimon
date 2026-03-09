@@ -89,9 +89,11 @@ HTTP client with ETag caching and rate limit tracking.
 
 **Token discovery** (`token.go`): `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` subprocess.
 
-**ETag caching**: `sync.Map` keyed by API path. `getJSON()` sends `If-None-Match` header when a cached ETag exists. On HTTP 304, returns cached body. On success, stores response ETag and body.
+**ETag caching** (`cache.go`): Bounded LRU cache (5000 entries) using `container/list` + `sync.Mutex`. `getJSON()` sends `If-None-Match` header when a cached ETag exists. On HTTP 304, returns cached body. On success, stores response ETag and body. Evicts oldest entry when at capacity.
 
-**Rate limit tracking**: Every response passes through header parsing for `X-RateLimit-Remaining` and `X-RateLimit-Reset`.
+**Error classification** (`errors.go`): HTTP 401/403 → `AuthError`, HTTP 429 → `RateLimitError` with `RetryAfter` duration parsed from `Retry-After` header. These typed errors propagate through the poller to the App for differentiated handling.
+
+**Rate limit tracking**: Every response passes through header parsing for `X-RateLimit-Remaining` and `X-RateLimit-Reset`. Parse errors are logged via slog instead of silently ignored.
 
 ### Methods
 
@@ -162,7 +164,7 @@ Runs in a goroutine, polls each repo, sends `PollResult` over a channel. The Bub
 `Dispatcher` manages subprocess lifecycle:
 - `Dispatch(repo, task)` — spawns `claude -p <task>`. Process group isolation via `Setpgid: true`.
 - `CheckAll()` — polls running agents, reaps zombies, kills agents exceeding `MaxLifetime`.
-- `Shutdown()` — terminates all running agents (SIGTERM to process group).
+- `Shutdown()` — graceful termination: SIGTERM to all process groups, 5s wait, then SIGKILL for stragglers.
 - `GetOutput(agentID, tailLines)` — reads tail of agent's output log.
 
 ### Auto-fix (`autofix.go`)

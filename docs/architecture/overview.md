@@ -63,7 +63,7 @@ internal/
 - **Multi-repo from the data layer up.** Config, client, models all support multiple repos. Views aggregate.
 - **Process group isolation.** Agent subprocesses use `Setpgid: true` so entire process trees can be killed cleanly.
 - **Backward-compatible config.** v1 `repo` key auto-migrates to v2 `repos` list.
-- **ETag caching.** `sync.Map` for thread-safe caching. Conditional requests reduce API usage.
+- **ETag caching.** Bounded LRU cache (5000 entries, `container/list` + `sync.Mutex`). Conditional requests reduce API usage.
 - **GoReleaser distribution.** Single binary for 6 platform targets. Homebrew tap for macOS.
 
 ## Dependencies

@@ -28,7 +28,8 @@ cmd/cimon/
 
 internal/
 ├── app/
-│   └── app.go           # App — root Bubbletea model, wires poller→DB→screens, key dispatch
+│   ├── app.go           # App — root Bubbletea model, wires poller→DB→screens, key dispatch, all actions
+│   └── app_test.go      # NewApp, handlePollResult, error classification, key handling, View
 ├── config/
 │   ├── config.go        # .cimon.yml v2 parser, v1 auto-migration, all config structs, Load/LoadFromPath
 │   ├── config_test.go   # v2 parsing, v1 migration, defaults, validation, ConfigError
@@ -40,8 +41,12 @@ internal/
 │   ├── poll.go          # PollResult
 │   └── models_test.go   # IsActive, Elapsed, Size, zero values
 ├── github/
-│   ├── client.go        # Client — net/http, ETag caching (sync.Map), rate limit tracking, get/post/put/patch
-│   ├── client_test.go   # ETags, rate limits, 404/403 handling, auth header, unmarshal errors
+│   ├── client.go        # Client — net/http, bounded LRU ETag cache, rate limit tracking, get/post/put/patch
+│   ├── client_test.go   # ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
+│   ├── cache.go         # etagCache — bounded LRU cache (container/list + sync.Mutex)
+│   ├── cache_test.go    # store/load, eviction, LRU ordering, delete
+│   ├── errors.go        # AuthError (401/403), RateLimitError (429) with RetryAfter
+│   ├── errors_test.go   # error type assertions, retry-after parsing
 │   ├── runs.go          # ListRuns, GetJobs — workflow run + job fetching
 │   ├── pulls.go         # ListPulls, GetPullDiff, GetCombinedStatus, FetchPRStatuses, DetectAgent
 │   ├── actions.go       # Approve, Merge, Rerun, RerunFailed, Cancel, CreateTag, DispatchWorkflow, CommentOnPR
@@ -113,7 +118,7 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 - **Poller→TUI communication:** Channel + `tea.Cmd` pattern (goroutine sends to channel, tea.Cmd reads from channel). Avoids `p.Send()` deadlock.
 - **Poll result handling:** Each PollResult persists runs/PRs to DB, rebuilds all screen data (pipeline, review queue, agent profiles, timeline, release confidence, metrics), then re-subscribes to the channel.
 - **Two-bar layout:** Fixed top bar (screen tabs) + fixed bottom bar (status). Content truncated to fit between them.
-- **ETag caching:** `sync.Map` keyed by URL path. Conditional requests with `If-None-Match`. 304s return cached body.
+- **ETag caching:** Bounded LRU cache (5000 entries) keyed by URL. Conditional requests with `If-None-Match`. 304s return cached body.
 - **Pure Go SQLite:** `modernc.org/sqlite` (no CGO). Dual connections: writer (MaxOpenConns=1) + reader pool (MaxOpenConns=4). WAL mode.
 - **Process group isolation:** Agent subprocesses get `Setpgid: true`. Kill with `syscall.Kill(-pid, SIGTERM)`.
 - **Selector pattern:** `Selector` struct (Next/Prev/SetCount/Index) embedded in list views for j/k navigation.
@@ -132,19 +137,22 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 go test ./... -count=1 -v
 ```
 
-139 tests across 11 test packages:
+266 tests across 13 test packages:
+- `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, screen switching, focus cycling, View
 - `config_test.go` — v2 parsing, v1 migration, defaults, validation, ConfigError, detect/categorize
-- `client_test.go` — ETags, rate limits, 404/403, auth, runs, jobs, pulls, diff, agent detection, search, actions
+- `client_test.go` — ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
+- `cache_test.go` — store/load, eviction, LRU ordering, delete, len
+- `errors_test.go` — AuthError/RateLimitError type assertions
 - `models_test.go` — IsActive, Elapsed, Size, zero values, PollResult
 - `db_test.go` — schema v2, CRUD, known failures, stats, catchup, dismissed
 - `agents_test.go` — outcome/trigger classification, profiles, dispatch, scheduler
 - `autofix_test.go` — evaluate, cooldown, known failure gating, prompt building
 - `review_test.go` — scoring, escalation, filtering, sorting, queue
 - `confidence_test.go` — signals, levels, edge cases
-- `polling_test.go` — cadence transitions, intervals
+- `polling_test.go` — cadence transitions, intervals, poller integration with httptest
 - `notify_test.go` — CanNotify, Send
 - `components_test.go` — selector, filter, sparkline, confirm, flash, action menu, pipeline
-- `screens_test.go` — dashboard, timeline, release, metrics
+- `screens_test.go` — dashboard, timeline, release, metrics, conditional roster
 
 Tests use `httptest` servers and in-memory SQLite. No network calls.
 

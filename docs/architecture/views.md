@@ -12,15 +12,19 @@ All rendering uses lipgloss-styled strings composed in Bubbletea models. Screens
 
 **Startup:** `main.go` loads config, discovers token, opens DB, passes all to `app.NewApp()`. App creates poller, builds config-derived lookups (release/agent workflow maps), initializes screen models.
 
-**Poll handling:** Each `PollResult` persists runs/PRs to DB via `UpsertRun`/`UpsertPull`, then `rebuildScreenData()` updates all screens: pipeline runs, review queue, agent profiles, timeline, release confidence, metrics stats.
+**Poll handling:** Each `PollResult` persists runs/PRs to DB via `UpsertRun`/`UpsertPull`, classifies errors (AuthError → status message, RateLimitError → retry countdown), tracks DB error count (flash after 3 consecutive failures), evaluates auto-fix triggers for failed runs, then `rebuildScreenData()` updates all screens: pipeline runs, review queue, agent profiles, timeline, release confidence, metrics stats.
+
+**Agent integration:** App owns `Dispatcher`, `Scheduler`, and `AutoFixTracker`. A 10s `agentTickMsg` checks scheduled tasks (dispatches workflow or local agent) and agent lifetimes. Dispatcher feeds running agents to dashboard roster. Graceful shutdown on quit (SIGTERM → 5s → SIGKILL).
+
+**Catchup overlay:** Tracks `lastInput` timestamp and pre-idle run/PR counts. When returning after idle threshold, shows summary of changes.
 
 **Screen switching:** Dashboard (`1`), Timeline (`2`), Release (`3`), Metrics (`4`). Stored as `ui.Screen` enum (defined in `internal/ui/app.go`).
 
-**View rendering:** `View()` returns `tea.View` with `v.AltScreen = true`. Two-bar layout: fixed top bar (screen tabs) + fixed bottom bar (status). Content truncated to fit between them.
+**View rendering:** `View()` returns `tea.View` with `v.AltScreen = true`. Minimum terminal size check (60x10). Two-bar layout: fixed top bar (screen tabs) + fixed bottom bar (confirmBar > flash > status). Content truncated to fit between them. LogPane splits content area when visible.
 
-**Key dispatch:** `Update()` handles `tea.KeyPressMsg` via `key.Matches()` against `ui.Keys`. Filter mode intercepts when active. Screen-specific handlers for dashboard (Tab focus, j/k per panel), timeline (j/k), release (left/right repo switch).
+**Key dispatch:** `Update()` handles `tea.KeyPressMsg` — ActionMenu and ConfirmBar intercept when active. Filter mode intercepts when active. Screen-specific handlers for dashboard (Tab focus, j/k per panel, all actions), timeline (j/k), release (left/right repo switch).
 
-**Status bar:** Bottom bar shows run count, active count, rate limit remaining, poll cadence.
+**Actions:** All dashboard actions wired: rerun (r), approve (a), merge (m), batch merge (M), dismiss (x), view diff (v), open browser (o), dispatch agent (D), contextual action menu (Enter). Destructive actions show ConfirmBar; results show Flash.
 
 ---
 
