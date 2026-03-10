@@ -24,11 +24,11 @@ func (h *HelpOverlay) Render(screenName string, width, height int) string {
 
 	bindings := []struct{ key, desc string }{
 		{"1/2/3/4", "Switch screen"},
-		{"j/k", "Navigate"},
+		{"WASD/hjkl", "Navigate"},
 		{"Tab", "Cycle focus"},
 		{"Enter", "Action menu"},
 		{"r", "Smart rerun"},
-		{"a", "Approve PR"},
+		{"A", "Approve PR"},
 		{"m", "Merge PR"},
 		{"M", "Batch merge"},
 		{"v", "View diff/output"},

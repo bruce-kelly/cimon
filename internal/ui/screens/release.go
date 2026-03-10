@@ -3,6 +3,7 @@ package screens
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
@@ -44,6 +45,20 @@ func (r *ReleaseModel) PrevRepo() {
 	r.CurrentRepo = (r.CurrentRepo - 1 + len(r.Repos)) % len(r.Repos)
 }
 
+// SelectedRun returns the currently selected release run, or nil.
+func (r *ReleaseModel) SelectedRun() *models.WorkflowRun {
+	if len(r.Repos) == 0 {
+		return nil
+	}
+	repo := r.Repos[r.CurrentRepo]
+	runs := r.Runs[repo]
+	idx := r.Selector.Index()
+	if idx < 0 || idx >= len(runs) {
+		return nil
+	}
+	return &runs[idx]
+}
+
 func (r *ReleaseModel) Render() string {
 	if len(r.Repos) == 0 {
 		return lipgloss.NewStyle().Foreground(ui.ColorMuted).Render("  No release workflows configured")
@@ -77,20 +92,43 @@ func (r *ReleaseModel) Render() string {
 			elapsed := components.FormatDuration(run.Elapsed())
 			ago := components.FormatTimeAgo(run.UpdatedAt)
 
+			sha := run.HeadSHA
+			if len(sha) > 7 {
+				sha = sha[:7]
+			}
+			progress := components.RenderJobProgress(run.Jobs)
+
 			line := fmt.Sprintf(" %s %s  %s  %s  %s",
 				lipgloss.NewStyle().Foreground(dotColor).Render(dot),
 				run.Name,
 				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.HeadBranch),
+				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(sha),
+				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Actor),
+			)
+			if progress != "" {
+				line += "  " + progress
+			}
+			line += fmt.Sprintf("  %s  %s",
 				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
 				lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(ago),
 			)
 
-			// Show jobs if available
-			if len(run.Jobs) > 0 {
+			// Inline job grid for selected run
+			if selected && len(run.Jobs) > 0 {
 				for _, job := range run.Jobs {
 					jobDot := ui.StatusDot(job.Conclusion)
 					jobColor := ui.StatusColor(job.Conclusion)
-					line += "\n   " + lipgloss.NewStyle().Foreground(jobColor).Render(jobDot) + " " + job.Name
+					jobElapsed := ""
+					if job.StartedAt != nil && job.CompletedAt != nil {
+						jobElapsed = "  " + components.FormatDuration(job.CompletedAt.Sub(*job.StartedAt))
+					} else if job.Status == "in_progress" && job.StartedAt != nil {
+						jobElapsed = "  " + components.FormatDuration(time.Since(*job.StartedAt)) + "..."
+					}
+					line += fmt.Sprintf("\n   %s %s%s",
+						lipgloss.NewStyle().Foreground(jobColor).Render(jobDot),
+						job.Name,
+						lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(jobElapsed),
+					)
 				}
 			}
 

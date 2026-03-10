@@ -18,6 +18,7 @@ type PipelineView struct {
 	Filter        *FilterBar
 	ExpandJobs    bool
 	KnownFailures map[string]bool // "repo:jobName" -> known
+	TickEven      bool            // toggles pulsing dot animation
 }
 
 func NewPipelineView() *PipelineView {
@@ -86,19 +87,54 @@ func (p *PipelineView) Render(width int) string {
 }
 
 func (p *PipelineView) renderRun(run models.WorkflowRun, selected bool, width int) string {
-	dot := ui.StatusDot(run.Conclusion)
+	dot := ui.PulsingDot(run.Conclusion, p.TickEven)
 	dotColor := ui.StatusColor(run.Conclusion)
 
 	elapsed := FormatDuration(run.Elapsed())
 	ago := FormatTimeAgo(run.UpdatedAt)
 
-	line := fmt.Sprintf(" %s %s  %s  %s  %s  %s",
+	// Short SHA
+	sha := run.HeadSHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+
+	// Job progress
+	progress := RenderJobProgress(run.Jobs)
+
+	// Failure hint: first failed step or job name
+	failHint := ""
+	if run.Conclusion == "failure" {
+		for _, j := range run.Jobs {
+			if j.Conclusion == "failure" {
+				for _, s := range j.Steps {
+					if s.Conclusion == "failure" {
+						failHint = lipgloss.NewStyle().Foreground(ui.ColorRed).Render(" \u25b8 " + s.Name)
+						break
+					}
+				}
+				if failHint == "" {
+					failHint = lipgloss.NewStyle().Foreground(ui.ColorRed).Render(" \u25b8 " + j.Name)
+				}
+				break
+			}
+		}
+	}
+
+	line := fmt.Sprintf(" %s %s  %s  %s  %s",
 		lipgloss.NewStyle().Foreground(dotColor).Render(dot),
 		run.Name,
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.HeadBranch),
+		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(sha),
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Actor),
+	)
+	if progress != "" {
+		line += "  " + progress
+	}
+	line += fmt.Sprintf("  %s  %s%s",
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
 		lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(ago),
+		failHint,
 	)
 
 	if selected {

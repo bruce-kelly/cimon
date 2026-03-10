@@ -54,6 +54,14 @@ func (d *DashboardModel) CycleFocus() {
 	}
 }
 
+func (d *DashboardModel) CycleFocusReverse() {
+	max := FocusArea(3)
+	if !d.ShowRoster {
+		max = 2
+	}
+	d.Focus = (d.Focus - 1 + max) % max
+}
+
 func (d *DashboardModel) Render() string {
 	if d.Width == 0 {
 		return ""
@@ -92,31 +100,50 @@ func (d *DashboardModel) Render() string {
 	}
 	reviewContent := d.renderReviewQueue(reviewWidth)
 
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ui.ColorBorder)
+
 	if panelWidth == d.Width {
 		// Single column
-		lines := []string{
-			pipeHeader, pipeContent, "",
-			reviewHeader, reviewContent,
+		bw := panelWidth - 2
+		if bw < 10 {
+			bw = 10
 		}
+		lines := borderStyle.Width(bw).Render(pipeHeader + "\n" + pipeContent)
+		lines += "\n" + borderStyle.Width(bw).Render(reviewHeader + "\n" + reviewContent)
 		if d.ShowRoster {
 			rosterHeader := headerStyle.Render("Agent Roster")
 			if d.Focus == FocusRoster {
 				rosterHeader = headerStyle.Render("[Agent Roster]")
 			}
-			lines = append(lines, "", rosterHeader, d.renderAgentRoster(panelWidth))
+			lines += "\n" + borderStyle.Width(bw).Render(rosterHeader + "\n" + d.renderAgentRoster(panelWidth))
 		}
-		return strings.Join(lines, "\n")
+		return lines
 	}
 
-	leftPanel := lipgloss.NewStyle().Width(panelWidth).Render(pipeHeader + "\n" + pipeContent)
-	centerPanel := lipgloss.NewStyle().Width(reviewWidth).Render(reviewHeader + "\n" + reviewContent)
+	pipeBW := panelWidth - 2
+	if pipeBW < 10 {
+		pipeBW = 10
+	}
+	leftPanel := borderStyle.Width(pipeBW).Render(pipeHeader + "\n" + pipeContent)
+
+	reviewBW := reviewWidth - 2
+	if reviewBW < 10 {
+		reviewBW = 10
+	}
+	centerPanel := borderStyle.Width(reviewBW).Render(reviewHeader + "\n" + reviewContent)
 
 	if d.ShowRoster {
 		rosterHeader := headerStyle.Render("Agent Roster")
 		if d.Focus == FocusRoster {
 			rosterHeader = headerStyle.Render("[Agent Roster]")
 		}
-		rightPanel := lipgloss.NewStyle().Width(panelWidth).Render(rosterHeader + "\n" + d.renderAgentRoster(panelWidth))
+		rosterBW := panelWidth - 2
+		if rosterBW < 10 {
+			rosterBW = 10
+		}
+		rightPanel := borderStyle.Width(rosterBW).Render(rosterHeader + "\n" + d.renderAgentRoster(panelWidth))
 		return lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, centerPanel, rightPanel)
 	}
 
@@ -177,6 +204,7 @@ func (d *DashboardModel) renderReviewItem(item review.ReviewItem, selected bool,
 }
 
 func (d *DashboardModel) renderAgentRoster(width int) string {
+	d.RosterSel.SetCount(len(d.AgentProfiles))
 	var sb strings.Builder
 
 	// Workflow agent profiles

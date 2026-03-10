@@ -133,7 +133,7 @@ func (l *LogPane) renderHeader() string {
 		title = "Log"
 	}
 	if l.IsLive {
-		title += " [LIVE]"
+		title += "  LIVE \u25cf"
 	}
 	return title
 }

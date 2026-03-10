@@ -355,12 +355,12 @@ func TestActionMenu_InactiveIgnoresKeys(t *testing.T) {
 func TestActionMenu_Render(t *testing.T) {
 	m := &ActionMenu{}
 	items := []ActionMenuItem{
-		{Label: "Approve", Key: "a"},
+		{Label: "Approve", Key: "A"},
 		{Label: "Merge", Key: "m"},
 	}
 	m.Show(items)
 	rendered := m.Render()
-	assert.Contains(t, rendered, "> a  Approve")
+	assert.Contains(t, rendered, "> A  Approve")
 	assert.Contains(t, rendered, "  m  Merge")
 }
 
@@ -523,4 +523,72 @@ func TestFormatTimeAbsolute_OlderYear(t *testing.T) {
 
 func TestFormatTimeAbsolute_ZeroTime(t *testing.T) {
 	assert.Equal(t, "", FormatTimeAbsolute(time.Time{}))
+}
+
+// --- Progress Bar ---
+
+func TestRenderJobProgress_AllComplete(t *testing.T) {
+	jobs := []models.Job{
+		{Status: "completed", Conclusion: "success"},
+		{Status: "completed", Conclusion: "success"},
+		{Status: "completed", Conclusion: "success"},
+	}
+	result := RenderJobProgress(jobs)
+	assert.Contains(t, result, "[3/3]")
+}
+
+func TestRenderJobProgress_Mixed(t *testing.T) {
+	jobs := []models.Job{
+		{Status: "completed", Conclusion: "success"},
+		{Status: "in_progress"},
+		{Status: "queued"},
+	}
+	result := RenderJobProgress(jobs)
+	assert.Contains(t, result, "[1/3]")
+}
+
+func TestRenderJobProgress_Empty(t *testing.T) {
+	result := RenderJobProgress(nil)
+	assert.Equal(t, "", result)
+}
+
+func TestRenderJobProgress_WithFailure(t *testing.T) {
+	jobs := []models.Job{
+		{Status: "completed", Conclusion: "success"},
+		{Status: "completed", Conclusion: "failure"},
+		{Status: "completed", Conclusion: "success"},
+	}
+	result := RenderJobProgress(jobs)
+	assert.Contains(t, result, "[3/3]")
+}
+
+func TestJobProgressColor_Success(t *testing.T) {
+	jobs := []models.Job{{Status: "completed", Conclusion: "success"}}
+	color := JobProgressColor(jobs)
+	assert.Equal(t, "green", color)
+}
+
+func TestJobProgressColor_InProgress(t *testing.T) {
+	jobs := []models.Job{{Status: "in_progress"}}
+	color := JobProgressColor(jobs)
+	assert.Equal(t, "amber", color)
+}
+
+func TestJobProgressColor_Failure(t *testing.T) {
+	jobs := []models.Job{{Status: "completed", Conclusion: "failure"}}
+	color := JobProgressColor(jobs)
+	assert.Equal(t, "red", color)
+}
+
+func TestRenderMiniBar_Full(t *testing.T) {
+	assert.Equal(t, "█████", RenderMiniBar(5, 5, 5))
+}
+
+func TestRenderMiniBar_Half(t *testing.T) {
+	result := RenderMiniBar(3, 6, 6)
+	assert.Equal(t, "███░░░", result)
+}
+
+func TestRenderMiniBar_Zero(t *testing.T) {
+	assert.Equal(t, "░░░░░", RenderMiniBar(0, 5, 5))
 }

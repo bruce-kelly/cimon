@@ -87,6 +87,10 @@ type App struct {
 	preIdleRuns  int
 	preIdlePulls int
 
+	// Live log pane tracking
+	liveRunID   int64
+	liveRunRepo string
+
 	// UI state
 	width      int
 	height     int
@@ -95,6 +99,7 @@ type App struct {
 	rateLimit  int
 	lastPoll   time.Time
 	dbErrors   int
+	tickEven   bool
 }
 
 // NewApp creates a fully wired App ready to run.
@@ -257,6 +262,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case agentTickMsg:
+		a.tickEven = !a.tickEven
 		// Check scheduled tasks
 		if a.scheduler != nil && a.dispatcher != nil {
 			for _, task := range a.scheduler.DueTasks(time.Now()) {
@@ -483,6 +489,7 @@ func (a *App) rebuildScreenData() {
 	}
 
 	// Dashboard — pipeline
+	a.dashboard.Pipeline.TickEven = a.tickEven
 	a.dashboard.Pipeline.SetRuns(allRuns)
 
 	// Dashboard — review queue
@@ -492,6 +499,7 @@ func (a *App) rebuildScreenData() {
 		a.config.ReviewQueue.Escalation.Red,
 		a.dismissed,
 	)
+	a.dashboard.ReviewSel.SetCount(len(a.dashboard.ReviewItems))
 
 	// Dashboard — agent profiles
 	agentWFs := make(map[string]bool)
@@ -507,6 +515,7 @@ func (a *App) rebuildScreenData() {
 		}
 	}
 	a.dashboard.AgentProfiles = agents.BuildAgentProfiles(agentRuns, agentWFs)
+	a.dashboard.RosterSel.SetCount(len(a.dashboard.AgentProfiles))
 
 	// Timeline — all runs chronologically
 	a.timeline.SetRuns(allRuns)
@@ -540,6 +549,17 @@ func (a *App) rebuildScreenData() {
 		}
 		conf := confidence.ComputeConfidence(runs, repoPulls, len(reviewItems), newFailures)
 		a.release.Confidence[repo] = conf
+	}
+
+	// Update release selector count for current repo
+	if len(a.release.Repos) > 0 {
+		curRepo := a.release.Repos[a.release.CurrentRepo]
+		a.release.Selector.SetCount(len(a.release.Runs[curRepo]))
+	}
+
+	// Live log pane refresh
+	if a.liveRunID != 0 {
+		a.refreshLiveLogPane()
 	}
 
 	// Metrics — refresh from DB
@@ -672,8 +692,10 @@ func (a App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (a App) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, ui.Keys.Tab):
+	case key.Matches(msg, ui.Keys.Tab), key.Matches(msg, ui.Keys.Right):
 		a.dashboard.CycleFocus()
+	case key.Matches(msg, ui.Keys.Left):
+		a.dashboard.CycleFocusReverse()
 	case key.Matches(msg, ui.Keys.Down):
 		switch a.dashboard.Focus {
 		case screens.FocusPipeline:
@@ -845,11 +867,18 @@ func (a App) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		case screens.FocusPipeline:
 			if run := a.dashboard.Pipeline.SelectedRun(); run != nil {
+				if run.IsActive() {
+					a.liveRunID = run.ID
+					a.liveRunRepo = run.Repo
+				} else {
+					a.liveRunID = 0
+					a.liveRunRepo = ""
+				}
 				a.logPane.SetContent(
-					fmt.Sprintf("%s — %s", run.Name, run.HTMLURL),
+					fmt.Sprintf("%s \u2014 %s", run.Name, run.HTMLURL),
 					fmt.Sprintf("Run #%d\nStatus: %s\nConclusion: %s\nBranch: %s\nActor: %s\n",
 						run.ID, run.Status, run.Conclusion, run.HeadBranch, run.Actor),
-					false,
+					run.IsActive(),
 				)
 				if a.logPane.Mode == components.LogPaneHidden {
 					a.logPane.CycleMode()
@@ -938,7 +967,7 @@ func (a App) handleDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				pr := a.dashboard.ReviewItems[idx].PR
 				items = append(items,
 					components.ActionMenuItem{
-						Label: "Approve", Key: "a",
+						Label: "Approve", Key: "A",
 						Action: func() {
 							go func() {
 								if err := a.client.Approve(a.ctx, pr.Repo, pr.Number); err != nil {
@@ -1018,16 +1047,138 @@ func (a App) handleTimelineKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) handleReleaseKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	s := msg.String()
 	switch {
-	case s == "left" || s == "h":
+	case key.Matches(msg, ui.Keys.Left):
 		a.release.PrevRepo()
-	case s == "right" || s == "l":
+		if len(a.release.Repos) > 0 {
+			repo := a.release.Repos[a.release.CurrentRepo]
+			a.release.Selector.SetCount(len(a.release.Runs[repo]))
+		}
+	case key.Matches(msg, ui.Keys.Right):
 		a.release.NextRepo()
+		if len(a.release.Repos) > 0 {
+			repo := a.release.Repos[a.release.CurrentRepo]
+			a.release.Selector.SetCount(len(a.release.Runs[repo]))
+		}
 	case key.Matches(msg, ui.Keys.Down):
 		a.release.Selector.Next()
 	case key.Matches(msg, ui.Keys.Up):
 		a.release.Selector.Prev()
+
+	case key.Matches(msg, ui.Keys.Enter), key.Matches(msg, ui.Keys.ViewDiff):
+		if run := a.release.SelectedRun(); run != nil {
+			runCopy := *run
+			if runCopy.IsActive() {
+				a.liveRunID = runCopy.ID
+				a.liveRunRepo = runCopy.Repo
+			} else {
+				a.liveRunID = 0
+				a.liveRunRepo = ""
+			}
+			go func() {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("Run #%d  %s\n", runCopy.ID, runCopy.HTMLURL))
+				sb.WriteString(fmt.Sprintf("Status: %s  Conclusion: %s\n", runCopy.Status, runCopy.Conclusion))
+				sb.WriteString(fmt.Sprintf("Branch: %s  SHA: %s  Event: %s\n", runCopy.HeadBranch, runCopy.HeadSHA[:min(7, len(runCopy.HeadSHA))], runCopy.Event))
+				sb.WriteString(fmt.Sprintf("Actor: %s\n", runCopy.Actor))
+				if !runCopy.CreatedAt.IsZero() {
+					sb.WriteString(fmt.Sprintf("Started: %s  Elapsed: %s\n", runCopy.CreatedAt.Format("15:04:05"), components.FormatDuration(runCopy.Elapsed())))
+				}
+				sb.WriteString("\n")
+
+				// Fetch jobs if not already present
+				jobs := runCopy.Jobs
+				if len(jobs) == 0 {
+					fetched, err := a.client.GetJobs(a.ctx, runCopy.Repo, runCopy.ID)
+					if err != nil {
+						sb.WriteString(fmt.Sprintf("Failed to fetch jobs: %s\n", err))
+					} else {
+						jobs = fetched
+					}
+				}
+
+				for _, job := range jobs {
+					icon := "●"
+					switch job.Conclusion {
+					case "success":
+						icon = "✓"
+					case "failure":
+						icon = "✗"
+					case "cancelled":
+						icon = "○"
+					}
+					elapsed := ""
+					if job.StartedAt != nil && job.CompletedAt != nil {
+						elapsed = " " + components.FormatDuration(job.CompletedAt.Sub(*job.StartedAt))
+					}
+					sb.WriteString(fmt.Sprintf("  %s %s%s\n", icon, job.Name, elapsed))
+
+					// Show steps for failed jobs
+					if job.Conclusion == "failure" {
+						for _, step := range job.Steps {
+							if step.Conclusion == "failure" {
+								sb.WriteString(fmt.Sprintf("      ✗ %s\n", step.Name))
+							}
+						}
+					}
+				}
+
+				// Fetch logs for failed jobs
+				for _, job := range jobs {
+					if job.Conclusion == "failure" {
+						sb.WriteString(fmt.Sprintf("\n── %s (failed) ──\n", job.Name))
+						logs, err := a.client.GetFailedLogs(a.ctx, runCopy.Repo, job.ID)
+						if err != nil {
+							sb.WriteString(fmt.Sprintf("  Failed to fetch logs: %s\n", err))
+						} else if logs == "" {
+							sb.WriteString("  (no logs available)\n")
+						} else {
+							// Truncate long logs
+							if len(logs) > 4000 {
+								logs = logs[len(logs)-4000:]
+							}
+							sb.WriteString(logs)
+							sb.WriteString("\n")
+						}
+					}
+				}
+
+				title := fmt.Sprintf("%s — %s", runCopy.Name, runCopy.HeadBranch)
+				a.logPane.SetContent(title, sb.String(), false)
+				if a.logPane.Mode == components.LogPaneHidden {
+					a.logPane.CycleMode()
+				}
+			}()
+		}
+
+	case key.Matches(msg, ui.Keys.Open):
+		if run := a.release.SelectedRun(); run != nil {
+			go openBrowser(run.HTMLURL)
+		}
+
+	case key.Matches(msg, ui.Keys.Rerun):
+		if run := a.release.SelectedRun(); run != nil {
+			runCopy := *run
+			a.confirmBar.Show(
+				fmt.Sprintf("Rerun %s #%d?", runCopy.Name, runCopy.ID),
+				func() {
+					go func() {
+						var err error
+						if runCopy.Conclusion == "failure" {
+							err = a.client.RerunFailed(a.ctx, runCopy.Repo, runCopy.ID)
+						} else {
+							err = a.client.Rerun(a.ctx, runCopy.Repo, runCopy.ID)
+						}
+						if err != nil {
+							a.flash.Show("Rerun failed: "+err.Error(), true)
+						} else {
+							a.flash.Show("Rerun triggered", false)
+						}
+					}()
+				},
+				func() {},
+			)
+		}
 	}
 	return a, nil
 }
@@ -1050,6 +1201,24 @@ func (a App) View() tea.View {
 		Padding(0, 1).
 		Width(a.width)
 
+	// Badge counts for screen tabs
+	failCount := 0
+	activeReleases := 0
+	for _, runs := range a.allRuns {
+		for _, r := range runs {
+			if r.Conclusion == "failure" {
+				failCount++
+			}
+		}
+	}
+	for _, runs := range a.release.Runs {
+		for _, r := range runs {
+			if r.IsActive() {
+				activeReleases++
+			}
+		}
+	}
+
 	// Top bar: screen tabs
 	screenIndicator := ""
 	screenList := []struct {
@@ -1063,10 +1232,21 @@ func (a App) View() tea.View {
 		{"4", "metrics", a.screen == ui.ScreenMetrics},
 	}
 	for _, s := range screenList {
+		badge := ""
+		switch s.num {
+		case "1":
+			if failCount > 0 {
+				badge = lipgloss.NewStyle().Foreground(ui.ColorRed).Render(fmt.Sprintf("(%d)", failCount))
+			}
+		case "3":
+			if activeReleases > 0 {
+				badge = lipgloss.NewStyle().Foreground(ui.ColorGreen).Render("\u25cf")
+			}
+		}
 		if s.active {
-			screenIndicator += lipgloss.NewStyle().Foreground(ui.ColorAccent).Render("["+s.num+"]"+s.name) + " "
+			screenIndicator += lipgloss.NewStyle().Foreground(ui.ColorAccent).Render("["+s.num+"]"+s.name) + badge + " "
 		} else {
-			screenIndicator += lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(" "+s.num+" "+s.name) + " "
+			screenIndicator += lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(" "+s.num+" "+s.name) + badge + " "
 		}
 	}
 	topBar := barStyle.Render(screenIndicator)
@@ -1166,6 +1346,78 @@ func (a App) View() tea.View {
 	v := tea.NewView(rendered)
 	v.AltScreen = true
 	return v
+}
+
+func (a *App) refreshLiveLogPane() {
+	var liveRun *models.WorkflowRun
+	for _, runs := range a.allRuns {
+		for i := range runs {
+			if runs[i].ID == a.liveRunID {
+				liveRun = &runs[i]
+				break
+			}
+		}
+	}
+	if liveRun == nil {
+		a.liveRunID = 0
+		a.liveRunRepo = ""
+		a.logPane.IsLive = false
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Run #%d  %s\n", liveRun.ID, liveRun.HTMLURL))
+	sb.WriteString(fmt.Sprintf("Status: %s  Conclusion: %s\n", liveRun.Status, liveRun.Conclusion))
+	sha := liveRun.HeadSHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	sb.WriteString(fmt.Sprintf("Branch: %s  SHA: %s  Actor: %s\n", liveRun.HeadBranch, sha, liveRun.Actor))
+	if !liveRun.CreatedAt.IsZero() {
+		sb.WriteString(fmt.Sprintf("Started: %s  Elapsed: %s\n",
+			liveRun.CreatedAt.Format("15:04:05"),
+			components.FormatDuration(liveRun.Elapsed()),
+		))
+	}
+	sb.WriteString("\n")
+
+	for _, job := range liveRun.Jobs {
+		dot := ui.StatusDot(job.Conclusion)
+		if job.Status == "in_progress" && job.Conclusion == "" {
+			dot = ui.PulsingDot("", a.tickEven)
+		}
+		dotColor := ui.StatusColor(job.Conclusion)
+		elapsed := ""
+		if job.StartedAt != nil {
+			if job.CompletedAt != nil {
+				elapsed = components.FormatDuration(job.CompletedAt.Sub(*job.StartedAt))
+			} else {
+				elapsed = components.FormatDuration(time.Since(*job.StartedAt)) + "..."
+			}
+		} else if job.Status == "queued" {
+			elapsed = "queued"
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s  %s\n",
+			lipgloss.NewStyle().Foreground(dotColor).Render(dot),
+			job.Name,
+			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
+		))
+	}
+
+	sb.WriteString("\n")
+	progress := components.RenderJobProgress(liveRun.Jobs)
+	if progress != "" {
+		sb.WriteString("  " + progress + "\n")
+	}
+
+	title := fmt.Sprintf("%s \u2014 %s", liveRun.Name, liveRun.HeadBranch)
+	isStillLive := liveRun.IsActive()
+	a.logPane.SetContent(title, sb.String(), isStillLive)
+
+	if !isStillLive {
+		a.liveRunID = 0
+		a.liveRunRepo = ""
+	}
 }
 
 func (a App) findRepoConfig(repo string) *config.RepoConfig {

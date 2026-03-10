@@ -75,22 +75,30 @@ func (t *TimelineModel) Render() string {
 		dot := ui.StatusDot(run.Conclusion)
 		dotColor := ui.StatusColor(run.Conclusion)
 
-		// Repo prefix with color
+		// Shorten repo to just name
+		repoName := run.Repo
+		if idx := strings.LastIndex(repoName, "/"); idx >= 0 {
+			repoName = repoName[idx+1:]
+		}
 		repoIdx := t.repoColorIdx[run.Repo]
 		repoColor := ui.RepoColor(repoIdx)
-		repoPrefix := lipgloss.NewStyle().Foreground(repoColor).Render(run.Repo)
+		repoPrefix := lipgloss.NewStyle().Foreground(repoColor).Render(repoName)
 
 		elapsed := components.FormatDuration(run.Elapsed())
 		absTime := components.FormatTimeAbsolute(run.UpdatedAt)
+		progress := components.RenderJobProgress(run.Jobs)
 
-		line := fmt.Sprintf(" %s  %s %s %s  %s  %s",
+		line := fmt.Sprintf(" %s  %s %s %s  %s",
 			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(absTime),
 			lipgloss.NewStyle().Foreground(dotColor).Render(dot),
 			repoPrefix,
 			run.Name,
 			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Actor),
-			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed),
 		)
+		if progress != "" {
+			line += "  " + progress
+		}
+		line += "  " + lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(elapsed)
 
 		if selected {
 			sb.WriteString(lipgloss.NewStyle().Background(ui.ColorSelection).Width(t.Width).Render(line))

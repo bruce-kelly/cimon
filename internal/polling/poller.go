@@ -85,9 +85,21 @@ func (p *Poller) pollOnce(ctx context.Context) {
 func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.PollResult {
 	result := models.PollResult{Repo: repo.Repo}
 
-	for _, group := range repo.Groups {
+	seen := make(map[string]bool) // dedupe workflows across groups
+	for name, group := range repo.Groups {
 		for _, wf := range group.Workflows {
-			runs, err := p.client.ListRuns(ctx, repo.Repo, wf, repo.Branch)
+			if seen[wf] {
+				continue
+			}
+			seen[wf] = true
+			var runs []models.WorkflowRun
+			var err error
+			if name == "ci" {
+				runs, err = p.client.ListRuns(ctx, repo.Repo, wf, repo.Branch)
+			} else {
+				// Release/agent workflows aren't branch-scoped (tags, dispatch, schedule)
+				runs, err = p.client.ListRunsUnscoped(ctx, repo.Repo, wf)
+			}
 			if err != nil {
 				slog.Error("list runs failed", "repo", repo.Repo, "workflow", wf, "err", err)
 				result.Error = err

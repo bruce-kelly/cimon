@@ -56,3 +56,15 @@ func StatusDot(conclusion string) string {
 		return "?"
 	}
 }
+
+// PulsingDot returns an alternating dot for in-progress runs.
+// Bright phase shows ●, dim phase shows ◌.
+func PulsingDot(conclusion string, tickEven bool) string {
+	if conclusion == "" {
+		if tickEven {
+			return "◌"
+		}
+		return "●"
+	}
+	return StatusDot(conclusion)
+}

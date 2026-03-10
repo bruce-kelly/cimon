@@ -14,6 +14,8 @@ type KeyMap struct {
 	LogCycle   key.Binding
 	Up         key.Binding
 	Down       key.Binding
+	Left       key.Binding
+	Right      key.Binding
 	Tab        key.Binding
 	Enter      key.Binding
 	Escape     key.Binding
@@ -39,10 +41,12 @@ var Keys = KeyMap{
 	LogCycle:   key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "log pane")),
 	Up:         key.NewBinding(key.WithKeys("k", "w", "up")),
 	Down:       key.NewBinding(key.WithKeys("j", "s", "down")),
+	Left:       key.NewBinding(key.WithKeys("h", "a", "left")),
+	Right:      key.NewBinding(key.WithKeys("d", "right")),
 	Tab:        key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "focus")),
 	Enter:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "actions")),
 	Escape:     key.NewBinding(key.WithKeys("esc")),
-	Approve:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "approve")),
+	Approve:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve")),
 	Merge:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge")),
 	BatchMerge: key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "batch merge")),
 	Rerun:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rerun")),
