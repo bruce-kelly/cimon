@@ -61,9 +61,15 @@ type RepoState struct {
 }
 
 // ComputeInlineStatus derives the inline display state from a repo's runs.
+// Only the most recent completed run per workflow determines failure status.
 func ComputeInlineStatus(runs []models.WorkflowRun) InlineStatus {
 	var status InlineStatus
 	status.Worst = StatusPassing
+
+	// Track which workflows we've already seen a completed run for.
+	// Runs arrive newest-first from the API, so the first completed run
+	// per workflow is the current state.
+	seenCompleted := make(map[string]bool)
 
 	for i := range runs {
 		r := &runs[i]
@@ -84,7 +90,16 @@ func ComputeInlineStatus(runs []models.WorkflowRun) InlineStatus {
 				TotalJobs:     total,
 				Elapsed:       r.Elapsed(),
 			})
-		} else if r.Conclusion == "failure" {
+			continue
+		}
+
+		// Only consider the latest completed run per workflow
+		if seenCompleted[r.WorkflowFile] {
+			continue
+		}
+		seenCompleted[r.WorkflowFile] = true
+
+		if r.Conclusion == "failure" {
 			status.Worst = StatusFailed
 			if status.FailedWorkflow == "" {
 				status.FailedWorkflow = r.Name

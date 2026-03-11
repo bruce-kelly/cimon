@@ -23,10 +23,11 @@ func TestComputeInlineStatus_HasFailure(t *testing.T) {
 	now := time.Now()
 	runs := []models.WorkflowRun{
 		{
-			Status:     "completed",
-			Conclusion: "failure",
-			Name:       "ci",
-			UpdatedAt:  now.Add(-4 * time.Minute),
+			Status:       "completed",
+			Conclusion:   "failure",
+			Name:         "ci",
+			WorkflowFile: "ci.yml",
+			UpdatedAt:    now.Add(-4 * time.Minute),
 			Jobs: []models.Job{
 				{Name: "build", Conclusion: "failure"},
 				{Name: "test", Conclusion: "failure"},
@@ -62,11 +63,48 @@ func TestComputeInlineStatus_HasActive(t *testing.T) {
 
 func TestComputeInlineStatus_FailureTrumpsActive(t *testing.T) {
 	runs := []models.WorkflowRun{
-		{Status: "completed", Conclusion: "failure", Name: "ci"},
-		{Status: "in_progress", Name: "deploy"},
+		{Status: "completed", Conclusion: "failure", Name: "ci", WorkflowFile: "ci.yml"},
+		{Status: "in_progress", Name: "deploy", WorkflowFile: "deploy.yml"},
 	}
 	status := ComputeInlineStatus(runs)
 	assert.Equal(t, StatusFailed, status.Worst)
+}
+
+func TestComputeInlineStatus_OldFailureSupersededByNewSuccess(t *testing.T) {
+	now := time.Now()
+	// Runs arrive newest-first. Latest CI run passed, old one failed.
+	runs := []models.WorkflowRun{
+		{
+			Status:       "completed",
+			Conclusion:   "success",
+			Name:         "CI",
+			WorkflowFile: "ci.yml",
+			UpdatedAt:    now.Add(-5 * time.Minute),
+		},
+		{
+			Status:       "completed",
+			Conclusion:   "failure",
+			Name:         "CI",
+			WorkflowFile: "ci.yml",
+			UpdatedAt:    now.Add(-15 * time.Hour),
+		},
+	}
+	status := ComputeInlineStatus(runs)
+	assert.Equal(t, StatusPassing, status.Worst, "old failure should not count when latest run passed")
+	assert.Empty(t, status.FailedWorkflow)
+}
+
+func TestComputeInlineStatus_LatestFailedOtherPassing(t *testing.T) {
+	now := time.Now()
+	// CI latest is failed, release latest is passing
+	runs := []models.WorkflowRun{
+		{Status: "completed", Conclusion: "failure", Name: "CI", WorkflowFile: "ci.yml", UpdatedAt: now},
+		{Status: "completed", Conclusion: "success", Name: "CI", WorkflowFile: "ci.yml", UpdatedAt: now.Add(-1 * time.Hour)},
+		{Status: "completed", Conclusion: "success", Name: "Release", WorkflowFile: "release.yml", UpdatedAt: now},
+	}
+	status := ComputeInlineStatus(runs)
+	assert.Equal(t, StatusFailed, status.Worst, "latest CI run failed so repo should be failed")
+	assert.Equal(t, "CI", status.FailedWorkflow)
 }
 
 func TestComputePRSummary_Empty(t *testing.T) {
