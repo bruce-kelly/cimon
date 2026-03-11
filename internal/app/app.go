@@ -76,8 +76,7 @@ type App struct {
 	statusText string
 	rateLimit  int
 	lastPoll   time.Time
-	dbErrors   int
-	tickEven   bool
+	dbErrors int
 }
 
 // NewApp creates a fully wired App ready to run.
@@ -221,7 +220,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		views.ClearExpiredNewFlags(a.repos, 30*time.Second)
 		a.compactView.UpdateRepos(a.repos)
-		a.tickEven = !a.tickEven
 		return a, tickCmd()
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
@@ -717,17 +715,6 @@ func (a App) renderFooter() string {
 	}
 
 	return lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(a.statusText)
-}
-
-// --- Kept from v1 ---
-
-func (a App) findRepoConfig(repo string) *config.RepoConfig {
-	for i := range a.config.Repos {
-		if a.config.Repos[i].Repo == repo {
-			return &a.config.Repos[i]
-		}
-	}
-	return nil
 }
 
 func openBrowser(url string) {
