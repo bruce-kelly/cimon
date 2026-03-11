@@ -3,6 +3,7 @@ package polling
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -168,4 +169,75 @@ func TestPoller_PollsAndSendsResults(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for poll result")
 	}
+}
+
+func TestPoller_Skips404Workflows(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	var missingHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/actions/workflows/ci.yml/runs":
+			json.NewEncoder(w).Encode(map[string]any{
+				"workflow_runs": []map[string]any{
+					{
+						"id": 1, "name": "CI", "path": ".github/workflows/ci.yml",
+						"status": "completed", "conclusion": "success",
+						"head_branch": "main", "head_sha": "abc123",
+						"event": "push", "actor": map[string]string{"login": "alice"},
+						"created_at": now, "updated_at": now,
+						"html_url": "https://example.com/runs/1",
+					},
+				},
+			})
+		case r.URL.Path == "/repos/owner/repo/actions/workflows/missing.yml/runs":
+			missingHits++
+			w.WriteHeader(404)
+			fmt.Fprint(w, `{"message":"Not Found"}`)
+		case r.URL.Path == "/repos/owner/repo/pulls":
+			json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.CimonConfig{
+		Repos: []config.RepoConfig{
+			{
+				Repo:   "owner/repo",
+				Branch: "main",
+				Groups: map[string]config.GroupConfig{
+					"ci":     {Workflows: []string{"ci.yml", "missing.yml"}},
+				},
+			},
+		},
+		Polling: config.PollingConfig{Idle: 1, Active: 1, Cooldown: 1},
+	}
+
+	resultCh := make(chan models.PollResult, 10)
+	client := github.NewTestClient("test-token", srv.URL)
+	p := New(client, cfg, resultCh)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	p.Start(ctx)
+	defer p.Stop()
+
+	// Drain at least 2 poll results
+	for i := 0; i < 2; i++ {
+		select {
+		case result := <-resultCh:
+			assert.Equal(t, "owner/repo", result.Repo)
+			// ci.yml runs should always be present
+			assert.Len(t, result.Runs, 1)
+			assert.NoError(t, result.Error)
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for poll result")
+		}
+	}
+
+	// missing.yml should only have been hit once (first poll), then skipped
+	assert.Equal(t, 1, missingHits, "404 workflow should only be requested once")
+	assert.True(t, p.notFound["owner/repo/missing.yml"])
 }

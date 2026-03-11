@@ -90,6 +90,10 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, bool, error) {
 		return nil, false, err
 	}
 
+	if resp.StatusCode == 404 {
+		return nil, false, &NotFoundError{Path: path}
+	}
+
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		return nil, false, &AuthError{
 			StatusCode: resp.StatusCode,
@@ -158,6 +162,10 @@ func (c *Client) mutate(ctx context.Context, method, path string, body io.Reader
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	if resp.StatusCode == 404 {
+		return nil, &NotFoundError{Path: path}
 	}
 
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {

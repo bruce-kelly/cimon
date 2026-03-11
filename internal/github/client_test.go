@@ -92,6 +92,8 @@ func TestErrorHandling404(t *testing.T) {
 
 	_, _, err := client.get(ctx, "/repos/owner/missing")
 	require.Error(t, err)
+	var nfErr *NotFoundError
+	assert.True(t, errors.As(err, &nfErr))
 	assert.Contains(t, err.Error(), "404")
 	assert.Contains(t, err.Error(), "/repos/owner/missing")
 }

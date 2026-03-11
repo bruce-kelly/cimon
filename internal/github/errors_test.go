@@ -8,6 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestNotFoundError(t *testing.T) {
+	err := &NotFoundError{Path: "/repos/owner/repo/actions/workflows/missing.yml/runs"}
+	var target *NotFoundError
+	assert.True(t, errors.As(err, &target))
+	assert.Contains(t, err.Error(), "404")
+	assert.Contains(t, err.Error(), "missing.yml")
+}
+
 func TestAuthError_Is(t *testing.T) {
 	err := &AuthError{StatusCode: 401, Message: "bad token"}
 	var target *AuthError

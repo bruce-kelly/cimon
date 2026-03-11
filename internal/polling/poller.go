@@ -2,6 +2,7 @@ package polling
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -19,6 +20,7 @@ type Poller struct {
 	state    *PollState
 	resultCh chan<- models.PollResult
 	cancel   context.CancelFunc
+	notFound map[string]bool // "repo/workflow" keys that returned 404
 }
 
 // New creates a Poller wired to the given client and config. Results are
@@ -29,6 +31,7 @@ func New(client *github.Client, cfg *config.CimonConfig, resultCh chan<- models.
 		config:   cfg,
 		state:    NewPollState(cfg.Polling.Idle, cfg.Polling.Active, cfg.Polling.Cooldown),
 		resultCh: resultCh,
+		notFound: make(map[string]bool),
 	}
 }
 
@@ -92,6 +95,10 @@ func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.P
 				continue
 			}
 			seen[wf] = true
+			nfKey := repo.Repo + "/" + wf
+			if p.notFound[nfKey] {
+				continue
+			}
 			var runs []models.WorkflowRun
 			var err error
 			if name == "ci" {
@@ -101,6 +108,12 @@ func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.P
 				runs, err = p.client.ListRunsUnscoped(ctx, repo.Repo, wf)
 			}
 			if err != nil {
+				var nfErr *github.NotFoundError
+				if errors.As(err, &nfErr) {
+					slog.Warn("workflow not found, skipping future polls", "repo", repo.Repo, "workflow", wf)
+					p.notFound[nfKey] = true
+					continue
+				}
 				slog.Error("list runs failed", "repo", repo.Repo, "workflow", wf, "err", err)
 				result.Error = err
 				continue

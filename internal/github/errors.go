@@ -15,6 +15,15 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("authentication failed (HTTP %d): %s", e.StatusCode, e.Message)
 }
 
+// NotFoundError indicates a GitHub resource does not exist (HTTP 404).
+type NotFoundError struct {
+	Path string
+}
+
+func (e *NotFoundError) Error() string {
+	return fmt.Sprintf("not found (HTTP 404): %s", e.Path)
+}
+
 // RateLimitError indicates GitHub rate limiting (HTTP 429 or X-RateLimit-Remaining: 0).
 type RateLimitError struct {
 	RetryAfter time.Duration
