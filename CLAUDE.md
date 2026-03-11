@@ -45,8 +45,8 @@ internal/
 │   ├── client_test.go   # ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
 │   ├── cache.go         # etagCache — bounded LRU cache (container/list + sync.Mutex)
 │   ├── cache_test.go    # store/load, eviction, LRU ordering, delete
-│   ├── errors.go        # AuthError (401/403), RateLimitError (429) with RetryAfter
-│   ├── errors_test.go   # error type assertions, retry-after parsing
+│   ├── errors.go        # AuthError (401/403), NotFoundError (404), RateLimitError (429) with RetryAfter
+│   ├── errors_test.go   # error type assertions, NotFoundError, retry-after parsing
 │   ├── runs.go          # ListRuns, GetJobs, GetFailedLogs — workflow run + job fetching
 │   ├── pulls.go         # ListPulls, GetPullDiff, GetCombinedStatus, FetchPRStatuses, DetectAgent
 │   ├── actions.go       # Approve, Merge, Rerun, RerunFailed, Cancel, CreateTag, DispatchWorkflow, CommentOnPR
@@ -62,7 +62,7 @@ internal/
 │   ├── dismissed.go     # AddDismissed, RemoveDismissed, IsDismissed, LoadDismissed
 │   └── db_test.go       # all CRUD, known failures, stats, catchup queries, dismissed ops
 ├── polling/
-│   ├── poller.go        # Poller — multi-repo poll loop, channel-based result delivery
+│   ├── poller.go        # Poller — multi-repo poll loop, channel-based result delivery, 404 workflow skip
 │   ├── state.go         # PollState — 3-tier adaptive cadence (idle/active/cooldown)
 │   └── polling_test.go  # cadence transitions, interval values
 ├── agents/
@@ -89,12 +89,12 @@ internal/
     ├── keys.go          # KeyMap — WASD + numbered action keybindings via bubbles/v2/key
     ├── theme.go         # Tokyo Night palette, StatusColor, StatusDot, RepoColor
     ├── views/
-    │   ├── repostate.go     # RepoState, InlineStatus, PRSummary, ComputeInlineStatus, SortByAttention, DetectNewFlag
+    │   ├── repostate.go     # RepoState, InlineStatus (with AgentFailCount), PRSummary, ComputeInlineStatus (critical vs agent), SortByAttention, DetectNewFlag
     │   ├── repostate_test.go # inline status, PR summary, sorting, NEW flag detection
     │   ├── compact.go       # CompactView — repo list with inline expansion, cursor, NEW flag, PR summaries
     │   ├── compact_test.go  # empty, all-green, failure expansion, active progress, cursor, NEW flag, PR summary
-    │   ├── detail.go        # DetailView — CI pipeline + PR sections, linear cursor, action applicability
-    │   ├── detail_test.go   # pipeline render, PR render, linear cursor, selected run/PR, empty repo
+    │   ├── detail.go        # DetailView — grouped workflow sections (CI→Builds→Release→Agents), latest-per-workflow dedup, linear cursor
+    │   ├── detail_test.go   # grouped render, PR render, linear cursor, selected run/PR, empty repo
     │   ├── rundetail.go     # RunDetailView — single run drill-down, jobs/steps, cursor, expand/collapse
     │   ├── rundetail_test.go # render, cursor, step expansion, empty/loading states
     │   ├── prdetail.go      # PRDetailView — single PR drill-down, file list, CI/review status
@@ -123,8 +123,13 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 - **Poll result handling:** Each PollResult persists runs/PRs to DB, rebuilds RepoStates (inline status, PR summaries, review items), detects NEW flags, updates views.
 - **Two-bar layout:** Fixed header (CIMON + clock) + fixed footer (status or action hints). Content truncated to fit between them.
 - **NEW flag:** Change detection indicator on repo lines. Fires on: passing→failed, new ready PR, release started. Clears on cursor selection or 30s timeout via 10s tick.
-- **Attention sorting:** Repos sorted by priority: failures → active runs → ready PRs → all-green.
-- **Inline expansion:** Repos with CI failures or in-progress runs auto-expand detail lines beneath the repo summary.
+- **Failure severity:** `StatusFailed` (red) for CI/build/release failures; `StatusAgentFailed` (amber ⚠) for agent workflow failures. Only groups with "agent" in the key name are non-critical.
+- **Attention sorting:** Repos sorted by priority: critical failures → agent failures → active runs → ready PRs → all-green.
+- **Inline expansion:** Repos with CI failures or in-progress runs auto-expand detail lines beneath the repo summary. Agent-only failures show count ("2 agent workflows failing") without full expansion.
+- **Latest-per-workflow:** Both `ComputeInlineStatus` and the detail view only consider the most recent completed run per workflow file. Old failures don't persist after a newer success.
+- **404 workflow skip:** Poller tracks workflows that return 404 and silently skips them on future polls. Handles deleted/renamed workflows without error spam.
+- **Agent dispatch:** Action1 on agent workflow runs in detail view triggers `DispatchWorkflow` (fresh run on configured branch) instead of `Rerun`. Guarded by active-run check and 5-minute cooldown.
+- **Detail view grouping:** Runs are deduped to latest-per-workflow, sorted by group priority (CI → Builds → Release → Agents), and rendered under group label section headers.
 - **ETag caching:** Bounded LRU cache (5000 entries) keyed by URL. Conditional requests with `If-None-Match`. 304s return cached body.
 - **Pure Go SQLite:** `modernc.org/sqlite` (no CGO). Dual connections: writer (MaxOpenConns=1) + reader pool (MaxOpenConns=4). WAL mode.
 - **Async action pattern:** Actions return `tea.Cmd` producing result messages (`actionResultMsg`, `diffResultMsg`, `logsResultMsg`, `jobsResultMsg`). Handlers guard against stale responses (e.g., navigated away before result arrives).
@@ -142,24 +147,24 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 go test ./... -count=1 -v
 ```
 
-321 tests across 12 test packages:
+327 tests across 12 test packages:
 - `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, compact/detail/run-detail/PR-detail navigation, d drill-in, a/esc back, NEW flag detection, View, async message handling
 - `config_test.go` — v2 parsing, v1 migration, defaults, validation, ConfigError, detect/categorize
 - `client_test.go` — ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
 - `cache_test.go` — store/load, eviction, LRU ordering, delete, len
-- `errors_test.go` — AuthError/RateLimitError type assertions
+- `errors_test.go` — AuthError/NotFoundError/RateLimitError type assertions
 - `models_test.go` — IsActive, Elapsed, Size, zero values, PollResult
 - `db_test.go` — schema v2, CRUD, known failures, stats, catchup, dismissed
 - `agents_test.go` — outcome/trigger classification, profiles, dispatch, scheduler
 - `autofix_test.go` — evaluate, cooldown, known failure gating, prompt building
 - `review_test.go` — scoring, escalation, filtering, sorting, queue
 - `confidence_test.go` — signals, levels, edge cases
-- `polling_test.go` — cadence transitions, intervals, poller integration with httptest
+- `polling_test.go` — cadence transitions, intervals, poller integration with httptest, 404 workflow skip
 - `notify_test.go` — CanNotify, Send
 - `components_test.go` — selector, confirm (tea.Cmd return), flash, pipeline, format helpers
-- `repostate_test.go` — inline status computation, PR summary, attention sorting, NEW flag detection
+- `repostate_test.go` — inline status (latest-per-workflow, critical vs agent), PR summary, attention sorting, NEW flag detection
 - `compact_test.go` — empty, all-green, failure expansion, active progress, cursor, NEW flag, PR summary
-- `detail_test.go` — pipeline render, PR render, linear cursor, selected run/PR, empty repo
+- `detail_test.go` — grouped render, PR render, linear cursor, selected run/PR, empty repo
 - `rundetail_test.go` — render, cursor navigation, step expand/collapse, auto-expand failures, loading state, SetJobs
 - `prdetail_test.go` — render, cursor navigation, file list, CI/review status, agent/draft badges, loading state
 - `diffparse_test.go` — single/multi-file, binary, rename, empty diff parsing
@@ -279,7 +284,7 @@ Only `repo` (v1) or `repos` (v2) is required. Everything else has defaults.
 ### Detail View (per-repo)
 | Key | Action |
 |-----|--------|
-| `1` | Rerun selected run / Approve selected PR |
+| `1` | Rerun selected CI run / Dispatch selected agent run / Approve selected PR |
 | `2` | View diff (PR) or logs (run) |
 | `3` | Dismiss selected PR |
 | `e` | Toggle log pane (hidden → half → full) |

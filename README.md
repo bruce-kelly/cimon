@@ -34,7 +34,7 @@ CIMON searches for `.cimon.yml` starting from the current directory, walking up 
 
 CIMON has four views:
 
-**Compact View** — One line per repo with inline status. Repos with CI failures or active runs auto-expand to show detail. Sorted by attention priority (failures first). A `NEW` flag appears when something changes.
+**Compact View** — One line per repo with inline status. Repos with CI failures or active runs auto-expand to show detail. Sorted by attention priority (failures first). A `NEW` flag appears when something changes. Agent workflow failures show as amber (⚠) separately from critical CI failures (red ✗).
 
 ```
 CIMON ──────────────── 12:47
@@ -43,13 +43,14 @@ CIMON ──────────────── 12:47
 ■ repo-b    ✓  1 PR  (CI ⧗)
 ■ repo-c    ✗  3 PRs (1 ready)  NEW
   ci: build ✗  test ✗  4m ago
-■ repo-d    ● releasing
+■ repo-d    ⚠  2 agent workflows failing
+■ repo-e    ● releasing
   deploy ███████░░░ 7/10  1:22
 
 ────────────── active 5s  rl:4830
 ```
 
-**Detail View** — Press `d`/`Enter` to drill into a repo. See recent CI runs with job expansion, open PRs sorted by review priority. Take action directly: rerun, approve, merge, dismiss, view diff.
+**Detail View** — Press `d`/`Enter` to drill into a repo. Runs are grouped by config group (CI Pipeline, Release, Agents, etc.) with section headers, deduplicated to the latest per workflow. Take action directly: rerun CI, dispatch agent workflows, approve, merge, dismiss, view diff.
 
 **Run Detail View** — Drill into a specific CI run. See all jobs with expand/collapse for steps. Auto-fetches failed job logs.
 
@@ -59,6 +60,10 @@ CIMON ──────────────── 12:47
 
 - **Multi-repo monitoring** — Watch CI pipelines across all your repositories from one compact view
 - **Inline expansion** — Failed and active repos auto-expand to show job details and progress bars
+- **Agent-aware severity** — Agent workflow failures show as amber (informational), CI/build/release failures as red (critical)
+- **Agent dispatch** — Re-trigger agent workflows directly from the detail view with active-run and cooldown guards
+- **Grouped detail view** — Runs organized by config group (CI → Builds → Release → Agents) with section headers
+- **Resilient polling** — Deleted or renamed workflows return 404 once then are skipped for the session
 - **Review queue** — Priority-sorted PRs needing your attention, with escalation coloring by age
 - **Agent PR detection** — Identifies agent-created PRs (Claude Code, Copilot, etc.) with configurable patterns
 - **Batch merge** — Merge all ready agent PRs across repos with one keypress (`1`)
@@ -150,7 +155,7 @@ Only `repos` is required. Everything else has defaults. Old single-repo configs 
 
 | Key | Action |
 |-----|--------|
-| `1` | Rerun (run) / Approve (PR) |
+| `1` | Rerun (CI run) / Dispatch (agent run) / Approve (PR) |
 | `2` | View diff / logs |
 | `3` | Dismiss PR |
 | `e` | Toggle log pane |
