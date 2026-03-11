@@ -12,10 +12,11 @@ import (
 type RepoStatus int
 
 const (
-	StatusPassing RepoStatus = iota
+	StatusPassing     RepoStatus = iota
 	StatusPending
 	StatusActive
-	StatusFailed
+	StatusAgentFailed // non-critical (agent) workflow failure — amber
+	StatusFailed      // critical (CI/build/release) workflow failure — red
 )
 
 // ActiveRunInfo summarizes a running workflow for inline display.
@@ -33,6 +34,7 @@ type InlineStatus struct {
 	FailedWorkflow string
 	FailedJobs     []string
 	FailedAt       time.Time
+	AgentFailCount int // non-critical workflow failures
 	ActiveRuns     []ActiveRunInfo
 	Releasing      bool
 }
@@ -62,7 +64,10 @@ type RepoState struct {
 
 // ComputeInlineStatus derives the inline display state from a repo's runs.
 // Only the most recent completed run per workflow determines failure status.
-func ComputeInlineStatus(runs []models.WorkflowRun) InlineStatus {
+// criticalWorkflows identifies workflow files (e.g. "ci.yml") whose failures
+// are red/critical. Failures in other workflows are amber/informational.
+// If nil, all workflows are treated as critical.
+func ComputeInlineStatus(runs []models.WorkflowRun, criticalWorkflows map[string]bool) InlineStatus {
 	var status InlineStatus
 	status.Worst = StatusPassing
 
@@ -100,14 +105,22 @@ func ComputeInlineStatus(runs []models.WorkflowRun) InlineStatus {
 		seenCompleted[r.WorkflowFile] = true
 
 		if r.Conclusion == "failure" {
-			status.Worst = StatusFailed
-			if status.FailedWorkflow == "" {
-				status.FailedWorkflow = r.Name
-				status.FailedAt = r.UpdatedAt
-				for _, j := range r.Jobs {
-					if j.Conclusion == "failure" {
-						status.FailedJobs = append(status.FailedJobs, j.Name)
+			isCritical := criticalWorkflows == nil || criticalWorkflows[r.WorkflowFile]
+			if isCritical {
+				status.Worst = StatusFailed
+				if status.FailedWorkflow == "" {
+					status.FailedWorkflow = r.Name
+					status.FailedAt = r.UpdatedAt
+					for _, j := range r.Jobs {
+						if j.Conclusion == "failure" {
+							status.FailedJobs = append(status.FailedJobs, j.Name)
+						}
 					}
+				}
+			} else {
+				status.AgentFailCount++
+				if status.Worst < StatusAgentFailed {
+					status.Worst = StatusAgentFailed
 				}
 			}
 		}

@@ -13,7 +13,7 @@ func TestComputeInlineStatus_AllPassing(t *testing.T) {
 		{Status: "completed", Conclusion: "success"},
 		{Status: "completed", Conclusion: "success"},
 	}
-	status := ComputeInlineStatus(runs)
+	status := ComputeInlineStatus(runs, nil)
 	assert.Equal(t, StatusPassing, status.Worst)
 	assert.Empty(t, status.FailedJobs)
 	assert.Empty(t, status.ActiveRuns)
@@ -35,7 +35,7 @@ func TestComputeInlineStatus_HasFailure(t *testing.T) {
 			},
 		},
 	}
-	status := ComputeInlineStatus(runs)
+	status := ComputeInlineStatus(runs, nil)
 	assert.Equal(t, StatusFailed, status.Worst)
 	assert.Equal(t, []string{"build", "test"}, status.FailedJobs)
 	assert.Equal(t, "ci", status.FailedWorkflow)
@@ -53,7 +53,7 @@ func TestComputeInlineStatus_HasActive(t *testing.T) {
 			},
 		},
 	}
-	status := ComputeInlineStatus(runs)
+	status := ComputeInlineStatus(runs, nil)
 	assert.Equal(t, StatusActive, status.Worst)
 	assert.Len(t, status.ActiveRuns, 1)
 	assert.Equal(t, "deploy", status.ActiveRuns[0].Name)
@@ -66,7 +66,7 @@ func TestComputeInlineStatus_FailureTrumpsActive(t *testing.T) {
 		{Status: "completed", Conclusion: "failure", Name: "ci", WorkflowFile: "ci.yml"},
 		{Status: "in_progress", Name: "deploy", WorkflowFile: "deploy.yml"},
 	}
-	status := ComputeInlineStatus(runs)
+	status := ComputeInlineStatus(runs, nil)
 	assert.Equal(t, StatusFailed, status.Worst)
 }
 
@@ -89,7 +89,7 @@ func TestComputeInlineStatus_OldFailureSupersededByNewSuccess(t *testing.T) {
 			UpdatedAt:    now.Add(-15 * time.Hour),
 		},
 	}
-	status := ComputeInlineStatus(runs)
+	status := ComputeInlineStatus(runs, nil)
 	assert.Equal(t, StatusPassing, status.Worst, "old failure should not count when latest run passed")
 	assert.Empty(t, status.FailedWorkflow)
 }
@@ -102,8 +102,35 @@ func TestComputeInlineStatus_LatestFailedOtherPassing(t *testing.T) {
 		{Status: "completed", Conclusion: "success", Name: "CI", WorkflowFile: "ci.yml", UpdatedAt: now.Add(-1 * time.Hour)},
 		{Status: "completed", Conclusion: "success", Name: "Release", WorkflowFile: "release.yml", UpdatedAt: now},
 	}
-	status := ComputeInlineStatus(runs)
+	status := ComputeInlineStatus(runs, nil)
 	assert.Equal(t, StatusFailed, status.Worst, "latest CI run failed so repo should be failed")
+	assert.Equal(t, "CI", status.FailedWorkflow)
+}
+
+func TestComputeInlineStatus_AgentFailureIsAmber(t *testing.T) {
+	now := time.Now()
+	critical := map[string]bool{"ci.yml": true}
+	runs := []models.WorkflowRun{
+		{Status: "completed", Conclusion: "success", Name: "CI", WorkflowFile: "ci.yml", UpdatedAt: now},
+		{Status: "completed", Conclusion: "failure", Name: "claude-test-gaps", WorkflowFile: "claude-test-gaps.yml", UpdatedAt: now},
+		{Status: "completed", Conclusion: "failure", Name: "claude-dep-audit", WorkflowFile: "claude-dep-audit.yml", UpdatedAt: now},
+	}
+	status := ComputeInlineStatus(runs, critical)
+	assert.Equal(t, StatusAgentFailed, status.Worst, "agent-only failures should be amber, not red")
+	assert.Equal(t, 2, status.AgentFailCount)
+	assert.Empty(t, status.FailedWorkflow, "no critical workflow failed")
+}
+
+func TestComputeInlineStatus_CriticalFailureTrumpsAgent(t *testing.T) {
+	now := time.Now()
+	critical := map[string]bool{"ci.yml": true}
+	runs := []models.WorkflowRun{
+		{Status: "completed", Conclusion: "failure", Name: "CI", WorkflowFile: "ci.yml", UpdatedAt: now},
+		{Status: "completed", Conclusion: "failure", Name: "claude-test-gaps", WorkflowFile: "claude-test-gaps.yml", UpdatedAt: now},
+	}
+	status := ComputeInlineStatus(runs, critical)
+	assert.Equal(t, StatusFailed, status.Worst, "critical failure should still be red")
+	assert.Equal(t, 1, status.AgentFailCount)
 	assert.Equal(t, "CI", status.FailedWorkflow)
 }
 

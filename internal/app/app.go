@@ -206,7 +206,21 @@ func (a *App) buildRepoStates() []views.RepoState {
 		}
 		reviewItems := review.ReviewItemsFromPulls(activePRs, amberHours, redHours, nil)
 
-		inline := views.ComputeInlineStatus(runs)
+		// Build critical workflow set: all groups except "agents"
+		var criticalWorkflows map[string]bool
+		for name, group := range rc.Groups {
+			if strings.Contains(strings.ToLower(name), "agent") {
+				continue
+			}
+			if criticalWorkflows == nil {
+				criticalWorkflows = make(map[string]bool)
+			}
+			for _, wf := range group.Workflows {
+				criticalWorkflows[wf] = true
+			}
+		}
+
+		inline := views.ComputeInlineStatus(runs, criticalWorkflows)
 		if rw, ok := a.releaseWorkflows[rc.Repo]; ok {
 			for i := range inline.ActiveRuns {
 				for _, r := range runs {

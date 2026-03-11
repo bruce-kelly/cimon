@@ -58,9 +58,13 @@ func (cv *CompactView) Render(width, height int) string {
 		selected := i == cv.Cursor.Index()
 		lines = append(lines, renderRepoLine(repo, selected, width))
 
-		// Inline expansion for failures
+		// Inline expansion for critical failures
 		if repo.Inline.Worst == StatusFailed && repo.Inline.FailedWorkflow != "" {
 			lines = append(lines, renderFailedInline(repo.Inline, width))
+		}
+		// Inline note for agent-only failures
+		if repo.Inline.AgentFailCount > 0 && repo.Inline.Worst != StatusFailed {
+			lines = append(lines, renderAgentFailInline(repo.Inline.AgentFailCount, width))
 		}
 		// Inline expansion for active runs
 		for _, ar := range repo.Inline.ActiveRuns {
@@ -145,6 +149,16 @@ func renderFailedInline(status InlineStatus, width int) string {
 	return muted.Render("  "+status.FailedWorkflow+": ") + strings.Join(jobs, "  ") + muted.Render("  "+ago)
 }
 
+func renderAgentFailInline(count int, width int) string {
+	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	amber := lipgloss.NewStyle().Foreground(ui.ColorAmber)
+	noun := "agent workflow"
+	if count > 1 {
+		noun = "agent workflows"
+	}
+	return muted.Render("  ") + amber.Render(fmt.Sprintf("%d %s failing", count, noun))
+}
+
 func renderActiveInline(ar ActiveRunInfo, width int) string {
 	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	green := lipgloss.NewStyle().Foreground(ui.ColorGreen)
@@ -161,6 +175,8 @@ func statusDot(worst RepoStatus) string {
 	switch worst {
 	case StatusFailed:
 		c = ui.ColorRed
+	case StatusAgentFailed:
+		c = ui.ColorAmber
 	case StatusActive:
 		c = ui.ColorBlue
 	case StatusPending:
@@ -175,6 +191,8 @@ func statusIcon(status InlineStatus) string {
 	switch status.Worst {
 	case StatusFailed:
 		return lipgloss.NewStyle().Foreground(ui.ColorRed).Render("✗")
+	case StatusAgentFailed:
+		return lipgloss.NewStyle().Foreground(ui.ColorAmber).Render("⚠")
 	case StatusActive:
 		if status.Releasing {
 			return lipgloss.NewStyle().Foreground(ui.ColorBlue).Render("●") +
