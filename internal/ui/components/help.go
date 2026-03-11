@@ -17,32 +17,30 @@ func (h *HelpOverlay) Toggle() {
 	h.Visible = !h.Visible
 }
 
-func (h *HelpOverlay) Render(screenName string, width, height int) string {
+func (h *HelpOverlay) Render(viewName string, width, height int) string {
 	if !h.Visible {
 		return ""
 	}
 
 	bindings := []struct{ key, desc string }{
-		{"1/2/3/4", "Switch screen"},
-		{"WASD/hjkl", "Navigate"},
-		{"Tab", "Cycle focus"},
-		{"Enter", "Action menu"},
-		{"r", "Smart rerun"},
+		{"w/k", "Navigate up"},
+		{"s/j", "Navigate down"},
+		{"Enter", "Drill in / select"},
+		{"Esc", "Back / close log pane"},
+		{"r", "Rerun (on runs)"},
 		{"A", "Approve PR"},
 		{"m", "Merge PR"},
-		{"M", "Batch merge"},
-		{"v", "View diff/output"},
-		{"x", "Dismiss"},
+		{"M", "Batch merge ready agent PRs"},
+		{"x", "Dismiss PR"},
+		{"v", "View diff / logs"},
 		{"o", "Open in browser"},
-		{"D", "Dispatch agent"},
-		{"/", "Filter"},
 		{"l", "Toggle log pane"},
-		{"?", "This help"},
+		{"?", "Toggle help"},
 		{"q", "Quit"},
 	}
 
 	var sb strings.Builder
-	sb.WriteString(lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("Keybindings — " + screenName))
+	sb.WriteString(lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("Keybindings — " + viewName))
 	sb.WriteString("\n\n")
 
 	for _, b := range bindings {
