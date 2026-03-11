@@ -1,6 +1,8 @@
 # CIMON — CI Monitor TUI for GitHub Actions
 
-A compact terminal control plane for monitoring GitHub Actions pipelines and managing PR reviews across multiple repositories. Designed to run as a side pane alongside your editor.
+Cimon is a terminal UI for watching GitHub Actions and open pull requests across your repositories. It is designed to sit in a split pane while you work.
+
+It is useful if you already spend most of the day in a terminal and want repo status nearby. It is not trying to replace GitHub; it is a lightweight monitor with a drill-down view when you need more detail.
 
 <!-- screenshot placeholder -->
 
@@ -28,13 +30,13 @@ go install github.com/bruce-kelly/cimon/cmd/cimon@latest
 4. **Run** — `cimon`
 5. **Navigate** — `w`/`s` to move, `d`/`Enter` to drill in, `?` for help
 
-CIMON searches for `.cimon.yml` starting from the current directory, walking up to the root. If no config is found, it offers to run the setup wizard automatically.
+Cimon searches for `.cimon.yml` starting from the current directory, walking up to the root. If no config is found, it offers to run the setup wizard automatically.
 
-## How It Works
+## Overview
 
-CIMON has four views:
+The main flow starts in compact mode and drills down from there:
 
-**Compact View** — One line per repo with inline status. Repos with CI failures or active runs auto-expand to show detail. Sorted by attention priority (failures first). A `NEW` flag appears when something changes. Agent workflow failures show as amber (⚠) separately from critical CI failures (red ✗).
+**Compact View** — One line per repo with inline status. Repos with CI failures or active runs auto-expand to show detail. Repos are sorted by attention priority so the noisy or broken ones rise to the top. A `NEW` flag appears when something changes. Agent workflow failures show as amber (⚠) separately from critical CI failures (red ✗).
 
 ```
 CIMON ──────────────── 12:47
@@ -50,31 +52,29 @@ CIMON ──────────────── 12:47
 ────────────── active 5s  rl:4830
 ```
 
-**Detail View** — Press `d`/`Enter` to drill into a repo. Runs are grouped by config group (CI Pipeline, Release, Agents, etc.) with section headers, deduplicated to the latest per workflow. Take action directly: rerun CI, dispatch agent workflows, approve, merge, dismiss, view diff.
+**Detail View** — Press `d`/`Enter` to drill into a repo. Runs are grouped by config group (CI Pipeline, Release, Agents, etc.) with section headers, deduplicated to the latest per workflow. From here you can rerun CI, dispatch agent workflows, approve, merge, dismiss, or open diffs and logs.
 
-**Run Detail View** — Drill into a specific CI run. See all jobs with expand/collapse for steps. Auto-fetches failed job logs.
+**Run Detail View** — Drill into a specific workflow run. See all jobs with expand/collapse for steps. Failed job logs are fetched automatically.
 
-**PR Detail View** — Drill into a specific PR. See file list with +/- counts, CI/review status, agent badges. View diffs per file.
+**PR Detail View** — Drill into a specific PR. See the changed files, CI and review status, and agent badges. View diffs per file.
 
 ## Features
 
-- **Multi-repo monitoring** — Watch CI pipelines across all your repositories from one compact view
+- **Repo overview in one place** — Watch CI pipelines and open PRs across multiple repositories from one compact view
+- **Drill-down navigation** — Start from repo status, then open a repo, a run, or a PR for more detail
 - **Inline expansion** — Failed and active repos auto-expand to show job details and progress bars
-- **Agent-aware severity** — Agent workflow failures show as amber (informational), CI/build/release failures as red (critical)
-- **Agent dispatch** — Re-trigger agent workflows directly from the detail view with active-run and cooldown guards
-- **Grouped detail view** — Runs organized by config group (CI → Builds → Release → Agents) with section headers
-- **Resilient polling** — Deleted or renamed workflows return 404 once then are skipped for the session
-- **Review queue** — Priority-sorted PRs needing your attention, with escalation coloring by age
-- **Agent PR detection** — Identifies agent-created PRs (Claude Code, Copilot, etc.) with configurable patterns
-- **Batch merge** — Merge all ready agent PRs across repos with one keypress (`1`)
-- **Change detection** — `NEW` flag on repo lines when CI breaks, PRs become merge-ready, or releases start
-- **Attention sorting** — Repos ordered by priority: failures → active → ready PRs → all-green
+- **Agent-aware severity** — Agent workflow failures show as amber, while CI/build/release failures stay red
+- **Direct actions** — Rerun workflows, dispatch agent workflows, approve PRs, merge, dismiss, and open GitHub from the TUI
+- **Grouped detail view** — Runs are organized by config group (CI, builds, release, agents) with section headers
+- **Review queue** — Open PRs are summarized and sorted by attention
+- **Agent PR detection** — Agent-created PRs can be identified with configurable patterns
+- **Change detection** — `NEW` flags appear when CI breaks, PRs become merge-ready, or releases start
+- **Resilient polling** — Deleted or renamed workflows return 404 once, then are skipped for the session
 - **Log pane** — View PR diffs and failed job logs without leaving the terminal
-- **Cross-repo PR discovery** — Auto-discover PRs requesting your review across GitHub
-- **Adaptive polling** — Automatic rate adjustment: idle (30s), active (5s), cooldown
-- **SQLite persistence** — Workflow runs, PRs, and review events stored locally
-- **Desktop notifications** — Opt-in alerts for CI failures (Linux/macOS)
-- **ETag caching** — Conditional requests minimize API usage; 304s don't count against rate limits
+- **Adaptive polling** — Polling automatically speeds up when work is active and slows down when things are quiet
+- **SQLite persistence** — Workflow runs, PRs, and review events are stored locally
+- **Desktop notifications** — Optional CI failure alerts on Linux and macOS
+- **ETag caching** — Conditional requests help reduce API usage
 - **Cross-platform** — Single binary for Linux, macOS, and Windows (amd64/arm64)
 
 ## Config Reference
