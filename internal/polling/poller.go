@@ -110,7 +110,7 @@ func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.P
 			if err != nil {
 				var nfErr *github.NotFoundError
 				if errors.As(err, &nfErr) {
-					slog.Warn("workflow not found, skipping future polls", "repo", repo.Repo, "workflow", wf)
+					slog.Debug("workflow not found, skipping future polls", "repo", repo.Repo, "workflow", wf)
 					p.notFound[nfKey] = true
 					continue
 				}
