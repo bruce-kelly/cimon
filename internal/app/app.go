@@ -432,9 +432,13 @@ func (a App) handlePollResult(msg pollResultMsg) (tea.Model, tea.Cmd) {
 			for _, r := range runs {
 				if r.ID == a.runDetailView.Run.ID {
 					cursorPos := a.runDetailView.Cursor.Index()
+					// Poll results don't include jobs — preserve already-fetched jobs
+					existingJobs := a.runDetailView.Run.Jobs
 					a.runDetailView.Run = r
 					if len(r.Jobs) > 0 {
 						a.runDetailView.SetJobs(r.Jobs)
+					} else if len(existingJobs) > 0 {
+						a.runDetailView.Run.Jobs = existingJobs
 					}
 					for i := 0; i < cursorPos && i < a.runDetailView.Cursor.Count()-1; i++ {
 						a.runDetailView.Cursor.Next()
