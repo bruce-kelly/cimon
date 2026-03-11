@@ -96,7 +96,10 @@ type App struct {
 	allPulls map[string][]models.PullRequest
 
 	// Config-derived lookups
-	releaseWorkflows map[string]map[string]bool
+	releaseWorkflows   map[string]map[string]bool
+	agentWorkflows     map[string]map[string]bool // repo → agent workflow files
+	repoBranch         map[string]string           // repo → configured branch
+	dispatchCooldowns  map[string]time.Time        // "repo/workflow" → last dispatch time
 
 	// UI state
 	width      int
@@ -113,9 +116,18 @@ func NewApp(cfg *config.CimonConfig, client *ghclient.Client, database *db.Datab
 	ctx, cancel := context.WithCancel(context.Background())
 
 	releaseWorkflows := make(map[string]map[string]bool)
+	agentWorkflows := make(map[string]map[string]bool)
+	repoBranch := make(map[string]string)
 	for _, rc := range cfg.Repos {
 		rw := make(map[string]bool)
-		for _, g := range rc.Groups {
+		aw := make(map[string]bool)
+		repoBranch[rc.Repo] = rc.Branch
+		for name, g := range rc.Groups {
+			if strings.Contains(strings.ToLower(name), "agent") {
+				for _, wf := range g.Workflows {
+					aw[wf] = true
+				}
+			}
 			for _, cat := range []string{"release", "deploy"} {
 				if strings.Contains(strings.ToLower(g.Label), cat) {
 					for _, wf := range g.Workflows {
@@ -125,6 +137,7 @@ func NewApp(cfg *config.CimonConfig, client *ghclient.Client, database *db.Datab
 			}
 		}
 		releaseWorkflows[rc.Repo] = rw
+		agentWorkflows[rc.Repo] = aw
 	}
 
 	dismissed := make(map[string]bool)
@@ -147,9 +160,12 @@ func NewApp(cfg *config.CimonConfig, client *ghclient.Client, database *db.Datab
 		cancel:           cancel,
 		mode:             ui.ViewCompact,
 		dismissed:        dismissed,
-		allRuns:          make(map[string][]models.WorkflowRun),
-		allPulls:         make(map[string][]models.PullRequest),
-		releaseWorkflows: releaseWorkflows,
+		allRuns:           make(map[string][]models.WorkflowRun),
+		allPulls:          make(map[string][]models.PullRequest),
+		releaseWorkflows:  releaseWorkflows,
+		agentWorkflows:    agentWorkflows,
+		repoBranch:        repoBranch,
+		dispatchCooldowns: make(map[string]time.Time),
 	}
 
 	a.repos = a.buildRepoStates()
@@ -615,6 +631,10 @@ func (a App) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, ui.Keys.Action1):
 		if run := a.detailView.SelectedRun(); run != nil {
+			repo := a.detailView.Repo.FullName
+			if a.agentWorkflows[repo][run.WorkflowFile] {
+				return a.handleDispatchAgent(repo, run)
+			}
 			return a.handleRerun(run)
 		}
 		if item := a.detailView.SelectedReviewItem(); item != nil {
@@ -886,6 +906,44 @@ func (a App) handleDismissFromPRDetail() (tea.Model, tea.Cmd) {
 }
 
 // --- Action handlers ---
+
+func (a App) handleDispatchAgent(repo string, run *models.WorkflowRun) (tea.Model, tea.Cmd) {
+	wf := run.WorkflowFile
+	cooldownKey := repo + "/" + wf
+
+	// Guard: already running
+	for _, r := range a.allRuns[repo] {
+		if r.WorkflowFile == wf && r.IsActive() {
+			a.flash.Show(fmt.Sprintf("%s already running", run.Name), false)
+			return a, nil
+		}
+	}
+
+	// Guard: cooldown (5 minutes)
+	if last, ok := a.dispatchCooldowns[cooldownKey]; ok {
+		elapsed := time.Since(last)
+		if elapsed < 5*time.Minute {
+			remaining := (5*time.Minute - elapsed).Round(time.Second)
+			a.flash.Show(fmt.Sprintf("%s dispatched recently, wait %s", run.Name, remaining), false)
+			return a, nil
+		}
+	}
+
+	a.dispatchCooldowns[cooldownKey] = time.Now()
+	branch := a.repoBranch[repo]
+	if branch == "" {
+		branch = "main"
+	}
+	client := a.client
+	ctx := a.ctx
+	name := run.Name
+	return a, func() tea.Msg {
+		if err := client.DispatchWorkflow(ctx, repo, wf, branch); err != nil {
+			return actionResultMsg{Message: "Dispatch failed: " + err.Error(), IsError: true}
+		}
+		return actionResultMsg{Message: fmt.Sprintf("Dispatched %s", name), IsError: false}
+	}
+}
 
 func (a App) handleRerun(run *models.WorkflowRun) (tea.Model, tea.Cmd) {
 	client := a.client
@@ -1184,7 +1242,7 @@ func (a App) renderFooter() string {
 	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	switch a.mode {
 	case ui.ViewDetail:
-		return muted.Render("[1]rerun/approve [2]diff/logs [3]dismiss [e]log [r]github [a]back")
+		return muted.Render("[1]rerun/dispatch/approve [2]diff/logs [3]dismiss [e]log [r]github [a]back")
 	case ui.ViewRunDetail:
 		return muted.Render("[1]rerun [2]rerun-failed [e]logs [r]github [a]back")
 	case ui.ViewPRDetail:
