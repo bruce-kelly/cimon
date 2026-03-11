@@ -74,7 +74,8 @@ func (dv *DetailView) Render(width, height int) string {
 	}
 	for i, run := range dv.Repo.Runs {
 		selected := dv.Cursor.Index() == i
-		lines = append(lines, detailRunLine(run, selected, width))
+		groupLabel := dv.Repo.WorkflowGroups[run.WorkflowFile]
+		lines = append(lines, detailRunLine(run, groupLabel, selected, width))
 		// Expand jobs for selected run
 		if selected && len(run.Jobs) > 0 {
 			for _, job := range run.Jobs {
@@ -101,7 +102,7 @@ func (dv *DetailView) Render(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func detailRunLine(run models.WorkflowRun, selected bool, width int) string {
+func detailRunLine(run models.WorkflowRun, groupLabel string, selected bool, width int) string {
 	dot := detailRunStatusDot(run)
 	sha := run.HeadSHA
 	if len(sha) > 6 {
@@ -109,8 +110,12 @@ func detailRunLine(run models.WorkflowRun, selected bool, width int) string {
 	}
 	ago := components.FormatTimeAgo(run.UpdatedAt)
 
-	name := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Name)
-	line := fmt.Sprintf("  %s %s %s  %s  %s", run.HeadBranch, dot, sha, ago, name)
+	tag := groupLabel
+	if tag == "" {
+		tag = run.Name
+	}
+	tagStr := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(tag)
+	line := fmt.Sprintf("  %s %s %s  %s  %s", run.HeadBranch, dot, sha, ago, tagStr)
 
 	if selected {
 		style := lipgloss.NewStyle().Background(ui.ColorSelection)

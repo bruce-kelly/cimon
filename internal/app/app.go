@@ -252,14 +252,22 @@ func (a *App) buildRepoStates() []views.RepoState {
 			shortName = parts[1]
 		}
 
+		wfGroups := make(map[string]string)
+		for _, group := range rc.Groups {
+			for _, wf := range group.Workflows {
+				wfGroups[wf] = group.Label
+			}
+		}
+
 		state := views.RepoState{
-			RepoName:    shortName,
-			FullName:    rc.Repo,
-			Runs:        runs,
-			PRs:         activePRs,
-			ReviewItems: reviewItems,
-			Inline:      inline,
-			PRSummary:   views.ComputePRSummary(activePRs),
+			RepoName:       shortName,
+			FullName:       rc.Repo,
+			Runs:           runs,
+			PRs:            activePRs,
+			ReviewItems:    reviewItems,
+			Inline:         inline,
+			PRSummary:      views.ComputePRSummary(activePRs),
+			WorkflowGroups: wfGroups,
 		}
 
 		states = append(states, state)

@@ -48,13 +48,14 @@ type PRSummary struct {
 
 // RepoState holds all display state for one repo in the compact view.
 type RepoState struct {
-	RepoName    string // short name (repo portion only, no owner/)
-	FullName    string // owner/repo
-	Runs        []models.WorkflowRun
-	PRs         []models.PullRequest
-	ReviewItems []review.ReviewItem
-	Inline      InlineStatus
-	PRSummary   PRSummary
+	RepoName       string // short name (repo portion only, no owner/)
+	FullName       string // owner/repo
+	Runs           []models.WorkflowRun
+	PRs            []models.PullRequest
+	ReviewItems    []review.ReviewItem
+	Inline         InlineStatus
+	PRSummary      PRSummary
+	WorkflowGroups map[string]string // workflow file → group label (e.g. "CI Pipeline", "Agents")
 
 	// NEW flag state
 	NewFlag           bool
