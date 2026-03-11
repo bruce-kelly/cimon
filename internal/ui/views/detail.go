@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -19,9 +20,10 @@ type DetailView struct {
 }
 
 // NewDetailView creates a detail view for the given repo.
-// Deduplicates runs to show only the latest per workflow file.
+// Deduplicates runs to latest per workflow, sorted by group.
 func NewDetailView(repo RepoState) *DetailView {
 	repo.Runs = latestRunPerWorkflow(repo.Runs)
+	sortRunsByGroup(repo.Runs, repo.WorkflowGroups)
 	dv := &DetailView{
 		Repo:     repo,
 		RunCount: len(repo.Runs),
@@ -44,6 +46,34 @@ func latestRunPerWorkflow(runs []models.WorkflowRun) []models.WorkflowRun {
 		result = append(result, r)
 	}
 	return result
+}
+
+// groupPriority returns sort order for group labels (lower = first).
+func groupPriority(label string) int {
+	lower := strings.ToLower(label)
+	switch {
+	case strings.Contains(lower, "ci"):
+		return 0
+	case strings.Contains(lower, "build"):
+		return 1
+	case strings.Contains(lower, "release") || strings.Contains(lower, "deploy"):
+		return 2
+	case strings.Contains(lower, "agent"):
+		return 3
+	default:
+		return 4
+	}
+}
+
+func sortRunsByGroup(runs []models.WorkflowRun, groups map[string]string) {
+	if groups == nil {
+		return
+	}
+	sort.SliceStable(runs, func(i, j int) bool {
+		gi := groupPriority(groups[runs[i].WorkflowFile])
+		gj := groupPriority(groups[runs[j].WorkflowFile])
+		return gi < gj
+	})
 }
 
 // IsRunSelected returns true if the cursor is on a run (not a PR).
@@ -82,18 +112,24 @@ func (dv *DetailView) Render(width, height int) string {
 	lines = append(lines, repoHeader)
 	lines = append(lines, "")
 
-	// Workflows section
-	header := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render("Workflows")
-	lines = append(lines, header)
-
 	if len(dv.Repo.Runs) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(ui.ColorMuted).Render("  No recent runs"))
 	}
+	lastGroup := ""
 	for i, run := range dv.Repo.Runs {
-		selected := dv.Cursor.Index() == i
 		groupLabel := dv.Repo.WorkflowGroups[run.WorkflowFile]
-		lines = append(lines, detailRunLine(run, groupLabel, selected, width))
-		// Expand jobs for selected run
+		if groupLabel == "" {
+			groupLabel = "Other"
+		}
+		if groupLabel != lastGroup {
+			if lastGroup != "" {
+				lines = append(lines, "")
+			}
+			lines = append(lines, lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(groupLabel))
+			lastGroup = groupLabel
+		}
+		selected := dv.Cursor.Index() == i
+		lines = append(lines, detailRunLine(run, selected, width))
 		if selected && len(run.Jobs) > 0 {
 			for _, job := range run.Jobs {
 				lines = append(lines, detailJobLine(job))
@@ -119,20 +155,15 @@ func (dv *DetailView) Render(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func detailRunLine(run models.WorkflowRun, groupLabel string, selected bool, width int) string {
+func detailRunLine(run models.WorkflowRun, selected bool, width int) string {
 	dot := detailRunStatusDot(run)
 	sha := run.HeadSHA
 	if len(sha) > 6 {
 		sha = sha[:6]
 	}
 	ago := components.FormatTimeAgo(run.UpdatedAt)
-
-	tag := groupLabel
-	if tag == "" {
-		tag = run.Name
-	}
-	tagStr := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(tag)
-	line := fmt.Sprintf("  %s %s %s  %s  %s", run.HeadBranch, dot, sha, ago, tagStr)
+	name := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Name)
+	line := fmt.Sprintf("  %s %s %s  %s  %s", run.HeadBranch, dot, sha, ago, name)
 
 	if selected {
 		style := lipgloss.NewStyle().Background(ui.ColorSelection)

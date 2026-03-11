@@ -13,14 +13,16 @@ func TestDetailView_RenderCIPipeline(t *testing.T) {
 	repo := RepoState{
 		RepoName: "repo-c",
 		FullName: "owner/repo-c",
+		WorkflowGroups: map[string]string{"ci.yml": "CI Pipeline"},
 		Runs: []models.WorkflowRun{
 			{
-				Name:       "ci",
-				HeadBranch: "main",
-				HeadSHA:    "a1b2c3d4",
-				Conclusion: "failure",
-				Status:     "completed",
-				UpdatedAt:  time.Now().Add(-4 * time.Minute),
+				Name:         "ci",
+				WorkflowFile: "ci.yml",
+				HeadBranch:   "main",
+				HeadSHA:      "a1b2c3d4",
+				Conclusion:   "failure",
+				Status:       "completed",
+				UpdatedAt:    time.Now().Add(-4 * time.Minute),
 				Jobs: []models.Job{
 					{Name: "build", Conclusion: "failure"},
 					{Name: "test", Conclusion: "failure"},
@@ -28,18 +30,19 @@ func TestDetailView_RenderCIPipeline(t *testing.T) {
 				},
 			},
 			{
-				Name:       "ci",
-				HeadBranch: "main",
-				HeadSHA:    "f4e5d6a7",
-				Conclusion: "success",
-				Status:     "completed",
-				UpdatedAt:  time.Now().Add(-2 * time.Hour),
+				Name:         "ci",
+				WorkflowFile: "ci.yml",
+				HeadBranch:   "main",
+				HeadSHA:      "f4e5d6a7",
+				Conclusion:   "success",
+				Status:       "completed",
+				UpdatedAt:    time.Now().Add(-2 * time.Hour),
 			},
 		},
 	}
 	dv := NewDetailView(repo)
 	out := dv.Render(50, 30)
-	assert.Contains(t, out, "Workflows")
+	assert.Contains(t, out, "CI Pipeline")
 	assert.Contains(t, out, "main")
 	assert.Contains(t, out, "a1b2c3")
 	assert.Contains(t, out, "build")
