@@ -19,7 +19,9 @@ type DetailView struct {
 }
 
 // NewDetailView creates a detail view for the given repo.
+// Deduplicates runs to show only the latest per workflow file.
 func NewDetailView(repo RepoState) *DetailView {
+	repo.Runs = latestRunPerWorkflow(repo.Runs)
 	dv := &DetailView{
 		Repo:     repo,
 		RunCount: len(repo.Runs),
@@ -27,6 +29,21 @@ func NewDetailView(repo RepoState) *DetailView {
 	total := len(repo.Runs) + len(repo.ReviewItems)
 	dv.Cursor.SetCount(total)
 	return dv
+}
+
+// latestRunPerWorkflow returns the most recent run per workflow file.
+// Runs arrive newest-first from the API, so the first per file wins.
+func latestRunPerWorkflow(runs []models.WorkflowRun) []models.WorkflowRun {
+	seen := make(map[string]bool)
+	var result []models.WorkflowRun
+	for _, r := range runs {
+		if seen[r.WorkflowFile] {
+			continue
+		}
+		seen[r.WorkflowFile] = true
+		result = append(result, r)
+	}
+	return result
 }
 
 // IsRunSelected returns true if the cursor is on a run (not a PR).
@@ -65,8 +82,8 @@ func (dv *DetailView) Render(width, height int) string {
 	lines = append(lines, repoHeader)
 	lines = append(lines, "")
 
-	// CI Pipeline section
-	header := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render("CI Pipeline")
+	// Workflows section
+	header := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render("Workflows")
 	lines = append(lines, header)
 
 	if len(dv.Repo.Runs) == 0 {

@@ -39,7 +39,7 @@ func TestDetailView_RenderCIPipeline(t *testing.T) {
 	}
 	dv := NewDetailView(repo)
 	out := dv.Render(50, 30)
-	assert.Contains(t, out, "CI Pipeline")
+	assert.Contains(t, out, "Workflows")
 	assert.Contains(t, out, "main")
 	assert.Contains(t, out, "a1b2c3")
 	assert.Contains(t, out, "build")
@@ -74,8 +74,8 @@ func TestDetailView_LinearCursor(t *testing.T) {
 		RepoName: "repo-c",
 		FullName: "owner/repo-c",
 		Runs: []models.WorkflowRun{
-			{Name: "ci", HeadBranch: "main", Status: "completed"},
-			{Name: "ci", HeadBranch: "main", Status: "completed"},
+			{Name: "ci", HeadBranch: "main", Status: "completed", WorkflowFile: "ci.yml"},
+			{Name: "release", HeadBranch: "main", Status: "completed", WorkflowFile: "release.yml"},
 		},
 		ReviewItems: []review.ReviewItem{
 			{PR: models.PullRequest{Number: 201}},
