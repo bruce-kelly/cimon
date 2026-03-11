@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/bruce-kelly/cimon/internal/db"
 	ghclient "github.com/bruce-kelly/cimon/internal/github"
 	"github.com/bruce-kelly/cimon/internal/models"
+	"github.com/bruce-kelly/cimon/internal/review"
 	"github.com/bruce-kelly/cimon/internal/ui"
 	"github.com/bruce-kelly/cimon/internal/ui/views"
 	"github.com/stretchr/testify/assert"
@@ -186,4 +188,351 @@ func TestView_Quitting(t *testing.T) {
 	a.quitting = true
 	v := a.View()
 	assert.NotNil(t, v)
+}
+
+func TestUpdate_ActionResultMsg_ShowsFlash(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	msg := actionResultMsg{Message: "Rerun triggered", IsError: false}
+	m, _ := a.Update(msg)
+	a = m.(App)
+	assert.Equal(t, "Rerun triggered", a.flash.Message)
+	assert.False(t, a.flash.IsError)
+}
+
+func TestUpdate_ActionResultMsg_Error(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	msg := actionResultMsg{Message: "Rerun failed: 404", IsError: true}
+	m, _ := a.Update(msg)
+	a = m.(App)
+	assert.Equal(t, "Rerun failed: 404", a.flash.Message)
+	assert.True(t, a.flash.IsError)
+}
+
+func TestUpdate_DiffResultMsg_PopulatesLogPane(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	a.mode = ui.ViewDetail
+	msg := diffResultMsg{Title: "PR #42 diff", Content: "+added line\n-removed line"}
+	m, _ := a.Update(msg)
+	a = m.(App)
+	assert.Equal(t, "PR #42 diff", a.logPane.Title)
+	assert.Contains(t, a.logPane.Content, "+added line")
+}
+
+func TestUpdate_DiffResultMsg_Error(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	a.mode = ui.ViewDetail
+	msg := diffResultMsg{Err: fmt.Errorf("404 not found")}
+	m, _ := a.Update(msg)
+	a = m.(App)
+	assert.Contains(t, a.flash.Message, "404 not found")
+	assert.True(t, a.flash.IsError)
+}
+
+func TestUpdate_LogsResultMsg_IgnoredWhenNotInRunDetail(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	a.mode = ui.ViewCompact
+	msg := logsResultMsg{Title: "logs", Content: "some logs"}
+	m, _ := a.Update(msg)
+	a = m.(App)
+	assert.Equal(t, "", a.logPane.Title)
+}
+
+func TestHandleKey_DDrillsIn(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+
+	dMsg := tea.KeyPressMsg{}
+	dMsg.Text = "d"
+	m, _ := a.handleKey(dMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewDetail, a.mode)
+	assert.NotNil(t, a.detailView)
+}
+
+func TestHandleKey_AReturnsToCompact(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	a.mode = ui.ViewDetail
+	a.detailView = views.NewDetailView(views.RepoState{RepoName: "test", FullName: "owner/test"})
+
+	aMsg := tea.KeyPressMsg{}
+	aMsg.Text = "a"
+	m, _ := a.handleKey(aMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewCompact, a.mode)
+	assert.Nil(t, a.detailView)
+}
+
+func TestHandleKey_AAtCompactIsNoop(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	assert.Equal(t, ui.ViewCompact, a.mode)
+
+	aMsg := tea.KeyPressMsg{}
+	aMsg.Text = "a"
+	m, _ := a.handleKey(aMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewCompact, a.mode)
+}
+
+func TestHandleKey_DrillIntoRunDetail(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	repo := views.RepoState{
+		RepoName: "repo-a",
+		FullName: "owner/repo-a",
+		Runs: []models.WorkflowRun{
+			{ID: 1, Name: "ci", HeadBranch: "main", HeadSHA: "abc123",
+				Status: "completed", Conclusion: "failure",
+				CreatedAt: now, UpdatedAt: now},
+		},
+	}
+	a.mode = ui.ViewDetail
+	a.detailView = views.NewDetailView(repo)
+
+	dMsg := tea.KeyPressMsg{}
+	dMsg.Text = "d"
+	m, _ := a.handleKey(dMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewRunDetail, a.mode)
+	assert.NotNil(t, a.runDetailView)
+}
+
+func TestHandleKey_DrillIntoPRDetail(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	repo := views.RepoState{
+		RepoName: "repo-a",
+		FullName: "owner/repo-a",
+		ReviewItems: []review.ReviewItem{
+			{PR: models.PullRequest{Number: 42, Title: "Test PR", Repo: "owner/repo-a",
+				CreatedAt: now, UpdatedAt: now}, Age: time.Hour},
+		},
+	}
+	a.mode = ui.ViewDetail
+	a.detailView = views.NewDetailView(repo)
+
+	dMsg := tea.KeyPressMsg{}
+	dMsg.Text = "d"
+	m, _ := a.handleKey(dMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewPRDetail, a.mode)
+	assert.NotNil(t, a.prDetailView)
+}
+
+func TestHandleKey_BackFromRunDetail(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	a.mode = ui.ViewRunDetail
+	run := models.WorkflowRun{ID: 1, CreatedAt: now, UpdatedAt: now}
+	a.runDetailView = views.NewRunDetailView(run, "owner/repo-a")
+	a.detailView = views.NewDetailView(views.RepoState{FullName: "owner/repo-a"})
+
+	aMsg := tea.KeyPressMsg{}
+	aMsg.Text = "a"
+	m, _ := a.handleKey(aMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewDetail, a.mode)
+	assert.Nil(t, a.runDetailView)
+}
+
+func TestHandleKey_BackFromPRDetail(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	a.mode = ui.ViewPRDetail
+	pr := models.PullRequest{Number: 42, CreatedAt: now, UpdatedAt: now}
+	a.prDetailView = views.NewPRDetailView(pr, "owner/repo-a")
+	a.detailView = views.NewDetailView(views.RepoState{FullName: "owner/repo-a"})
+
+	aMsg := tea.KeyPressMsg{}
+	aMsg.Text = "a"
+	m, _ := a.handleKey(aMsg)
+	a = m.(App)
+	assert.Equal(t, ui.ViewDetail, a.mode)
+	assert.Nil(t, a.prDetailView)
+}
+
+func TestView_RunDetailMode(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	a.mode = ui.ViewRunDetail
+	run := models.WorkflowRun{
+		ID: 1, Name: "ci", HeadBranch: "main", HeadSHA: "abc123",
+		Status: "completed", Conclusion: "failure",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	a.runDetailView = views.NewRunDetailView(run, "owner/repo-a")
+	v := a.View()
+	assert.True(t, v.AltScreen)
+}
+
+func TestView_PRDetailMode(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	a.mode = ui.ViewPRDetail
+	pr := models.PullRequest{Number: 42, Title: "Test PR", CreatedAt: now, UpdatedAt: now}
+	a.prDetailView = views.NewPRDetailView(pr, "owner/repo-a")
+	v := a.View()
+	assert.True(t, v.AltScreen)
+}
+
+func TestUpdate_DiffResultMsg_ParsesFilesForPRDetail(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	a.mode = ui.ViewPRDetail
+	pr := models.PullRequest{Number: 42, Title: "Test PR", CreatedAt: now, UpdatedAt: now}
+	a.prDetailView = views.NewPRDetailView(pr, "owner/repo-a")
+
+	diff := "diff --git a/foo.go b/foo.go\n+added\n-removed\ndiff --git a/bar.go b/bar.go\n+new line"
+	msg := diffResultMsg{Title: "PR #42 diff", Content: diff}
+	m, _ := a.Update(msg)
+	a = m.(App)
+
+	assert.Len(t, a.prDetailView.Files, 2)
+	assert.Equal(t, "foo.go", a.prDetailView.Files[0].Path)
+	assert.Equal(t, "bar.go", a.prDetailView.Files[1].Path)
+	assert.Equal(t, diff, a.prDetailView.RawDiff)
+}
+
+func TestHandlePollResult_PreservesRunDetailView(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	// Set up a run detail view
+	run := models.WorkflowRun{ID: 1, Name: "ci", Status: "in_progress",
+		Repo: "owner/repo-a", CreatedAt: now, UpdatedAt: now}
+	a.mode = ui.ViewRunDetail
+	a.runDetailView = views.NewRunDetailView(run, "owner/repo-a")
+
+	// Poll with updated run
+	result := models.PollResult{
+		Repo: "owner/repo-a",
+		Runs: []models.WorkflowRun{
+			{ID: 1, Name: "ci", Status: "completed", Conclusion: "success",
+				Repo: "owner/repo-a", CreatedAt: now, UpdatedAt: now},
+		},
+		RateLimitRemaining: 4500,
+	}
+	m, _ := a.handlePollResult(pollResultMsg{Result: result})
+	a = m.(App)
+
+	assert.Equal(t, ui.ViewRunDetail, a.mode)
+	assert.NotNil(t, a.runDetailView)
+	assert.Equal(t, "success", a.runDetailView.Run.Conclusion)
+}
+
+func TestHandlePollResult_RunDetailViewDisappearedRun(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	run := models.WorkflowRun{ID: 99, Name: "ci", Status: "in_progress",
+		Repo: "owner/repo-a", CreatedAt: now, UpdatedAt: now}
+	a.mode = ui.ViewRunDetail
+	a.runDetailView = views.NewRunDetailView(run, "owner/repo-a")
+	a.detailView = views.NewDetailView(views.RepoState{FullName: "owner/repo-a"})
+
+	// Poll without the run
+	result := models.PollResult{
+		Repo:               "owner/repo-a",
+		Runs:               []models.WorkflowRun{},
+		RateLimitRemaining: 4500,
+	}
+	m, _ := a.handlePollResult(pollResultMsg{Result: result})
+	a = m.(App)
+
+	assert.Equal(t, ui.ViewDetail, a.mode)
+	assert.Nil(t, a.runDetailView)
+	assert.Contains(t, a.flash.Message, "Run no longer available")
+}
+
+func TestHandlePollResult_PreservesPRDetailView(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	pr := models.PullRequest{Number: 42, Title: "Test PR", Repo: "owner/repo-a",
+		CreatedAt: now, UpdatedAt: now}
+	a.mode = ui.ViewPRDetail
+	a.prDetailView = views.NewPRDetailView(pr, "owner/repo-a")
+
+	// Poll with updated PR
+	result := models.PollResult{
+		Repo: "owner/repo-a",
+		PullRequests: []models.PullRequest{
+			{Number: 42, Title: "Test PR updated", Repo: "owner/repo-a",
+				CIStatus: "success", CreatedAt: now, UpdatedAt: now},
+		},
+		RateLimitRemaining: 4500,
+	}
+	m, _ := a.handlePollResult(pollResultMsg{Result: result})
+	a = m.(App)
+
+	assert.Equal(t, ui.ViewPRDetail, a.mode)
+	assert.NotNil(t, a.prDetailView)
+	assert.Equal(t, "Test PR updated", a.prDetailView.PR.Title)
+}
+
+func TestHandlePollResult_PRDetailViewClosedPR(t *testing.T) {
+	a := testApp(t)
+	a.width = 80
+	a.height = 40
+	now := time.Now()
+
+	pr := models.PullRequest{Number: 42, Title: "Test PR", Repo: "owner/repo-a",
+		CreatedAt: now, UpdatedAt: now}
+	a.mode = ui.ViewPRDetail
+	a.prDetailView = views.NewPRDetailView(pr, "owner/repo-a")
+	a.detailView = views.NewDetailView(views.RepoState{FullName: "owner/repo-a"})
+
+	// Poll without the PR
+	result := models.PollResult{
+		Repo:               "owner/repo-a",
+		PullRequests:       []models.PullRequest{},
+		RateLimitRemaining: 4500,
+	}
+	m, _ := a.handlePollResult(pollResultMsg{Result: result})
+	a = m.(App)
+
+	assert.Equal(t, ui.ViewDetail, a.mode)
+	assert.Nil(t, a.prDetailView)
+	assert.Contains(t, a.flash.Message, "PR #42 was closed")
 }

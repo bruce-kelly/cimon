@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/bruce-kelly/cimon/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,11 +72,11 @@ func TestSelector_SetCountZeroResetsIndex(t *testing.T) {
 func TestConfirmBar_ShowAndConfirm(t *testing.T) {
 	c := &ConfirmBar{}
 	confirmed := false
-	c.Show("Do the thing?", func() { confirmed = true }, nil)
+	c.Show("Do the thing?", func() tea.Cmd { confirmed = true; return nil }, nil)
 	assert.True(t, c.Active)
 	assert.Equal(t, "Do the thing?", c.Message)
 
-	consumed := c.HandleKey("y")
+	consumed, _ := c.HandleKey("y")
 	assert.True(t, consumed)
 	assert.False(t, c.Active)
 	assert.True(t, confirmed)
@@ -83,9 +85,9 @@ func TestConfirmBar_ShowAndConfirm(t *testing.T) {
 func TestConfirmBar_ShowAndCancel(t *testing.T) {
 	c := &ConfirmBar{}
 	cancelled := false
-	c.Show("Do the thing?", nil, func() { cancelled = true })
+	c.Show("Do the thing?", nil, func() tea.Cmd { cancelled = true; return nil })
 
-	consumed := c.HandleKey("n")
+	consumed, _ := c.HandleKey("n")
 	assert.True(t, consumed)
 	assert.False(t, c.Active)
 	assert.True(t, cancelled)
@@ -94,9 +96,9 @@ func TestConfirmBar_ShowAndCancel(t *testing.T) {
 func TestConfirmBar_EscCancels(t *testing.T) {
 	c := &ConfirmBar{}
 	cancelled := false
-	c.Show("Do the thing?", nil, func() { cancelled = true })
+	c.Show("Do the thing?", nil, func() tea.Cmd { cancelled = true; return nil })
 
-	consumed := c.HandleKey("esc")
+	consumed, _ := c.HandleKey("esc")
 	assert.True(t, consumed)
 	assert.False(t, c.Active)
 	assert.True(t, cancelled)
@@ -106,14 +108,14 @@ func TestConfirmBar_ConsumesOtherKeys(t *testing.T) {
 	c := &ConfirmBar{}
 	c.Show("Do the thing?", nil, nil)
 
-	consumed := c.HandleKey("x")
+	consumed, _ := c.HandleKey("x")
 	assert.True(t, consumed)     // consumed
 	assert.True(t, c.Active)     // still active
 }
 
 func TestConfirmBar_InactiveIgnoresKeys(t *testing.T) {
 	c := &ConfirmBar{}
-	consumed := c.HandleKey("y")
+	consumed, _ := c.HandleKey("y")
 	assert.False(t, consumed)
 }
 
@@ -128,6 +130,54 @@ func TestConfirmBar_RenderActive(t *testing.T) {
 	rendered := c.Render(80)
 	assert.Contains(t, rendered, "Merge PR?")
 	assert.Contains(t, rendered, "[y/n/Esc]")
+}
+
+func TestConfirmBar_ShowAndConfirmReturnsCmd(t *testing.T) {
+	c := &ConfirmBar{}
+	cmdCalled := false
+	c.Show("Do it?",
+		func() tea.Cmd { cmdCalled = true; return nil },
+		func() tea.Cmd { return nil },
+	)
+	assert.True(t, c.Active)
+	consumed, cmd := c.HandleKey("y")
+	assert.True(t, consumed)
+	assert.False(t, c.Active)
+	assert.True(t, cmdCalled)
+	assert.Nil(t, cmd)
+}
+
+func TestConfirmBar_CancelReturnsCmd(t *testing.T) {
+	c := &ConfirmBar{}
+	cancelCalled := false
+	c.Show("Do it?",
+		func() tea.Cmd { return nil },
+		func() tea.Cmd { cancelCalled = true; return nil },
+	)
+	consumed, cmd := c.HandleKey("n")
+	assert.True(t, consumed)
+	assert.False(t, c.Active)
+	assert.True(t, cancelCalled)
+	assert.Nil(t, cmd)
+}
+
+func TestConfirmBar_HandleKeyReturnsNilCmdForOtherKeys(t *testing.T) {
+	c := &ConfirmBar{}
+	c.Show("Do it?",
+		func() tea.Cmd { return nil },
+		func() tea.Cmd { return nil },
+	)
+	consumed, cmd := c.HandleKey("x")
+	assert.True(t, consumed)
+	assert.True(t, c.Active)
+	assert.Nil(t, cmd)
+}
+
+func TestConfirmBar_InactiveReturnsNilCmd(t *testing.T) {
+	c := &ConfirmBar{}
+	consumed, cmd := c.HandleKey("y")
+	assert.False(t, consumed)
+	assert.Nil(t, cmd)
 }
 
 // --- Flash ---

@@ -33,6 +33,33 @@ type pollErrorMsg struct {
 	Err error
 }
 
+// actionResultMsg carries the outcome of an async action (rerun, approve, merge).
+type actionResultMsg struct {
+	Message string
+	IsError bool
+}
+
+// diffResultMsg carries fetched diff content for the log pane.
+type diffResultMsg struct {
+	Title   string
+	Content string
+	Err     error
+}
+
+// logsResultMsg carries fetched job log content for the log pane.
+type logsResultMsg struct {
+	Title   string
+	Content string
+	Err     error
+}
+
+// jobsResultMsg carries fetched jobs for a workflow run.
+type jobsResultMsg struct {
+	RunID int64
+	Jobs  []models.Job
+	Err   error
+}
+
 // tickMsg fires periodically to expire NEW flags and refresh the clock.
 type tickMsg struct{}
 
@@ -48,10 +75,12 @@ type App struct {
 	cancel   context.CancelFunc
 
 	// v2 view models
-	mode        ui.ViewMode
-	compactView *views.CompactView
-	detailView  *views.DetailView
-	repos       []views.RepoState
+	mode           ui.ViewMode
+	compactView    *views.CompactView
+	detailView     *views.DetailView
+	runDetailView  *views.RunDetailView
+	prDetailView   *views.PRDetailView
+	repos          []views.RepoState
 
 	// Overlays
 	help       components.HelpOverlay
@@ -227,8 +256,97 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case tea.KeyPressMsg:
 		return a.handleKey(msg)
+	case actionResultMsg:
+		a.flash.Show(msg.Message, msg.IsError)
+		return a, nil
+	case diffResultMsg:
+		supportsLogPane := a.mode == ui.ViewDetail || a.mode == ui.ViewRunDetail || a.mode == ui.ViewPRDetail
+		if !supportsLogPane {
+			return a, nil // navigated away, discard
+		}
+		if msg.Err != nil {
+			a.flash.Show("Failed to fetch diff: "+msg.Err.Error(), true)
+			return a, nil
+		}
+		a.logPane.SetContent(msg.Title, msg.Content, false)
+		if a.logPane.Mode == components.LogPaneHidden {
+			a.logPane.CycleMode()
+		}
+		if a.mode == ui.ViewPRDetail && a.prDetailView != nil {
+			a.prDetailView.SetFiles(views.ParseDiffFiles(msg.Content))
+			a.prDetailView.RawDiff = msg.Content
+		}
+		return a, nil
+	case logsResultMsg:
+		if a.mode != ui.ViewRunDetail {
+			return a, nil
+		}
+		if msg.Err != nil {
+			a.flash.Show("Failed to fetch logs: "+msg.Err.Error(), true)
+			return a, nil
+		}
+		a.logPane.SetContent(msg.Title, msg.Content, false)
+		if a.logPane.Mode == components.LogPaneHidden {
+			a.logPane.CycleMode()
+		}
+		return a, nil
+	case jobsResultMsg:
+		if a.mode != ui.ViewRunDetail || a.runDetailView == nil {
+			return a, nil
+		}
+		if msg.Err != nil {
+			a.flash.Show("Failed to fetch jobs: "+msg.Err.Error(), true)
+			return a, nil
+		}
+		a.runDetailView.SetJobs(msg.Jobs)
+		return a, a.fetchFailedLogs(msg.Jobs)
 	}
 	return a, nil
+}
+
+func (a App) fetchFailedLogs(jobs []models.Job) tea.Cmd {
+	client := a.client
+	ctx := a.ctx
+	repo := ""
+	if a.detailView != nil {
+		repo = a.detailView.Repo.FullName
+	} else if a.runDetailView != nil {
+		repo = a.runDetailView.RepoName
+	}
+	if repo == "" {
+		return nil
+	}
+
+	type failedJob struct {
+		id   int64
+		name string
+	}
+	var failed []failedJob
+	for _, j := range jobs {
+		if j.Conclusion == "failure" && j.ID != 0 {
+			failed = append(failed, failedJob{id: j.ID, name: j.Name})
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+
+	return func() tea.Msg {
+		var sb strings.Builder
+		for _, fj := range failed {
+			logs, err := client.GetFailedLogs(ctx, repo, fj.id)
+			if err == nil && logs != "" {
+				sb.WriteString(fmt.Sprintf("=== %s ===\n", fj.name))
+				sb.WriteString(logs)
+				sb.WriteString("\n\n")
+			}
+		}
+		content := sb.String()
+		if content == "" {
+			content = "No failed job logs available"
+		}
+		return logsResultMsg{Title: "Job logs", Content: content}
+	}
 }
 
 func (a App) handlePollResult(msg pollResultMsg) (tea.Model, tea.Cmd) {
@@ -307,6 +425,57 @@ func (a App) handlePollResult(msg pollResultMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Preserve run detail view on poll update
+	if a.mode == ui.ViewRunDetail && a.runDetailView != nil {
+		found := false
+		for _, runs := range a.allRuns {
+			for _, r := range runs {
+				if r.ID == a.runDetailView.Run.ID {
+					cursorPos := a.runDetailView.Cursor.Index()
+					a.runDetailView.Run = r
+					if len(r.Jobs) > 0 {
+						a.runDetailView.SetJobs(r.Jobs)
+					}
+					for i := 0; i < cursorPos && i < a.runDetailView.Cursor.Count()-1; i++ {
+						a.runDetailView.Cursor.Next()
+					}
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			a.flash.Show("Run no longer available", true)
+			a.mode = ui.ViewDetail
+			a.runDetailView = nil
+		}
+	}
+
+	// Preserve PR detail view on poll update
+	if a.mode == ui.ViewPRDetail && a.prDetailView != nil {
+		found := false
+		for _, pulls := range a.allPulls {
+			for _, p := range pulls {
+				if p.Number == a.prDetailView.PR.Number && p.Repo == a.prDetailView.PR.Repo {
+					a.prDetailView.PR = p
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			a.flash.Show(fmt.Sprintf("PR #%d was closed", a.prDetailView.PR.Number), true)
+			a.mode = ui.ViewDetail
+			a.prDetailView = nil
+		}
+	}
+
 	activeRuns := 0
 	for _, runs := range a.allRuns {
 		for _, r := range runs {
@@ -330,8 +499,10 @@ func (a App) handlePollResult(msg pollResultMsg) (tea.Model, tea.Cmd) {
 
 func (a App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if a.confirmBar.Active {
-		a.confirmBar.HandleKey(msg.String())
-		return a, nil
+		handled, cmd := a.confirmBar.HandleKey(msg.String())
+		if handled {
+			return a, cmd
+		}
 	}
 
 	if key.Matches(msg, ui.Keys.Help) {
@@ -354,6 +525,10 @@ func (a App) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return a.handleCompactKey(msg)
 	case ui.ViewDetail:
 		return a.handleDetailKey(msg)
+	case ui.ViewRunDetail:
+		return a.handleRunDetailKey(msg)
+	case ui.ViewPRDetail:
+		return a.handlePRDetailKey(msg)
 	}
 
 	return a, nil
@@ -367,20 +542,20 @@ func (a App) handleCompactKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, ui.Keys.Up):
 		a.compactView.Cursor.Prev()
 		a.compactView.AcknowledgeSelected()
-	case key.Matches(msg, ui.Keys.Enter):
+	case key.Matches(msg, ui.Keys.DrillIn):
 		if r := a.compactView.SelectedRepo(); r != nil {
 			a.compactView.AcknowledgeSelected()
 			a.mode = ui.ViewDetail
 			a.detailView = views.NewDetailView(*r)
 		}
-	case key.Matches(msg, ui.Keys.BatchMerge):
+	case key.Matches(msg, ui.Keys.Action1):
 		return a.handleBatchMerge()
 	}
 	return a, nil
 }
 
 func (a App) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, ui.Keys.Escape) {
+	if key.Matches(msg, ui.Keys.Back) {
 		if a.logPane.Mode != components.LogPaneHidden {
 			a.logPane.Mode = components.LogPaneHidden
 			return a, nil
@@ -391,7 +566,7 @@ func (a App) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	if key.Matches(msg, ui.Keys.LogCycle) {
+	if key.Matches(msg, ui.Keys.Examine) {
 		a.logPane.CycleMode()
 		return a, nil
 	}
@@ -417,84 +592,332 @@ func (a App) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, ui.Keys.Up):
 		a.detailView.Cursor.Prev()
 
-	case key.Matches(msg, ui.Keys.Rerun):
+	case key.Matches(msg, ui.Keys.DrillIn):
+		return a.handleDetailDrillIn()
+
+	case key.Matches(msg, ui.Keys.Action1):
 		if run := a.detailView.SelectedRun(); run != nil {
 			return a.handleRerun(run)
 		}
-
-	case key.Matches(msg, ui.Keys.Approve):
 		if item := a.detailView.SelectedReviewItem(); item != nil {
 			return a.handleApprove(&item.PR)
 		}
-	case key.Matches(msg, ui.Keys.Merge):
-		if item := a.detailView.SelectedReviewItem(); item != nil {
-			return a.handleMerge(&item.PR)
-		}
-	case key.Matches(msg, ui.Keys.Dismiss):
+	case key.Matches(msg, ui.Keys.Action2):
+		return a.handleViewDiff()
+	case key.Matches(msg, ui.Keys.Action3):
 		if item := a.detailView.SelectedReviewItem(); item != nil {
 			return a.handleDismiss(&item.PR)
 		}
 
-	case key.Matches(msg, ui.Keys.ViewDiff):
-		return a.handleViewDiff()
-
-	case key.Matches(msg, ui.Keys.Open):
+	case key.Matches(msg, ui.Keys.Remote):
 		return a.handleOpen()
 	}
 
 	return a, nil
 }
 
-// --- Action handlers ---
+func (a App) handleDetailDrillIn() (tea.Model, tea.Cmd) {
+	if a.detailView == nil {
+		return a, nil
+	}
 
-func (a App) handleRerun(run *models.WorkflowRun) (tea.Model, tea.Cmd) {
-	repo := a.detailView.Repo.FullName
-	if run.Conclusion == "failure" {
-		go func() {
-			if err := a.client.RerunFailed(a.ctx, repo, run.ID); err != nil {
-				a.flash.Show("Rerun failed: "+err.Error(), true)
-			} else {
-				a.flash.Show("Rerun triggered", false)
+	if run := a.detailView.SelectedRun(); run != nil {
+		a.mode = ui.ViewRunDetail
+		a.runDetailView = views.NewRunDetailView(*run, a.detailView.Repo.FullName)
+		var cmds []tea.Cmd
+
+		if len(run.Jobs) == 0 {
+			client := a.client
+			ctx := a.ctx
+			repo := a.detailView.Repo.FullName
+			runID := run.ID
+			cmds = append(cmds, func() tea.Msg {
+				jobs, err := client.GetJobs(ctx, repo, runID)
+				if err != nil {
+					return jobsResultMsg{RunID: runID, Err: err}
+				}
+				return jobsResultMsg{RunID: runID, Jobs: jobs}
+			})
+		} else {
+			cmds = append(cmds, a.fetchFailedLogs(run.Jobs))
+		}
+		return a, tea.Batch(cmds...)
+	}
+
+	if item := a.detailView.SelectedReviewItem(); item != nil {
+		a.mode = ui.ViewPRDetail
+		a.prDetailView = views.NewPRDetailView(item.PR, a.detailView.Repo.FullName)
+
+		client := a.client
+		ctx := a.ctx
+		repo := a.detailView.Repo.FullName
+		number := item.PR.Number
+		return a, func() tea.Msg {
+			diff, err := client.GetPullDiff(ctx, repo, number)
+			if err != nil {
+				return diffResultMsg{Err: err}
 			}
-		}()
-	} else {
-		go func() {
-			if err := a.client.Rerun(a.ctx, repo, run.ID); err != nil {
-				a.flash.Show("Rerun failed: "+err.Error(), true)
-			} else {
-				a.flash.Show("Rerun triggered", false)
+			return diffResultMsg{Title: fmt.Sprintf("PR #%d diff", number), Content: diff}
+		}
+	}
+
+	return a, nil
+}
+
+func (a App) handleRunDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, ui.Keys.Back) {
+		if a.logPane.Mode != components.LogPaneHidden {
+			a.logPane.Mode = components.LogPaneHidden
+			return a, nil
+		}
+		a.mode = ui.ViewDetail
+		a.runDetailView = nil
+		a.logPane.Clear()
+		return a, nil
+	}
+
+	if key.Matches(msg, ui.Keys.Examine) {
+		a.logPane.CycleMode()
+		return a, nil
+	}
+
+	if a.logPane.Mode != components.LogPaneHidden {
+		if msg.String() == "up" {
+			a.logPane.ScrollPos--
+			if a.logPane.ScrollPos < 0 {
+				a.logPane.ScrollPos = 0
 			}
-		}()
+			return a, nil
+		}
+		if msg.String() == "down" {
+			a.logPane.ScrollPos++
+			return a, nil
+		}
+	}
+
+	switch {
+	case key.Matches(msg, ui.Keys.Down):
+		a.runDetailView.Cursor.Next()
+	case key.Matches(msg, ui.Keys.Up):
+		a.runDetailView.Cursor.Prev()
+	case key.Matches(msg, ui.Keys.DrillIn):
+		a.runDetailView.ToggleExpand()
+
+	case key.Matches(msg, ui.Keys.Action1):
+		return a.handleRerunFromRunDetail()
+	case key.Matches(msg, ui.Keys.Action2):
+		return a.handleRerunFailedFromRunDetail()
+
+	case key.Matches(msg, ui.Keys.Remote):
+		if a.runDetailView.Run.HTMLURL != "" {
+			go openBrowser(a.runDetailView.Run.HTMLURL)
+		}
 	}
 	return a, nil
 }
 
-func (a App) handleApprove(pr *models.PullRequest) (tea.Model, tea.Cmd) {
-	repo := a.detailView.Repo.FullName
-	go func() {
-		if err := a.client.Approve(a.ctx, repo, pr.Number); err != nil {
-			a.flash.Show("Approve failed: "+err.Error(), true)
-		} else {
-			a.flash.Show(fmt.Sprintf("Approved PR #%d", pr.Number), false)
+func (a App) handlePRDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, ui.Keys.Back) {
+		if a.logPane.Mode != components.LogPaneHidden {
+			a.logPane.Mode = components.LogPaneHidden
+			return a, nil
 		}
-	}()
+		a.mode = ui.ViewDetail
+		a.prDetailView = nil
+		a.logPane.Clear()
+		return a, nil
+	}
+
+	if key.Matches(msg, ui.Keys.Examine) {
+		a.logPane.CycleMode()
+		return a, nil
+	}
+
+	if a.logPane.Mode != components.LogPaneHidden {
+		if msg.String() == "up" {
+			a.logPane.ScrollPos--
+			if a.logPane.ScrollPos < 0 {
+				a.logPane.ScrollPos = 0
+			}
+			return a, nil
+		}
+		if msg.String() == "down" {
+			a.logPane.ScrollPos++
+			return a, nil
+		}
+	}
+
+	switch {
+	case key.Matches(msg, ui.Keys.Down):
+		a.prDetailView.Cursor.Next()
+	case key.Matches(msg, ui.Keys.Up):
+		a.prDetailView.Cursor.Prev()
+	case key.Matches(msg, ui.Keys.DrillIn):
+		if f := a.prDetailView.SelectedFile(); f != nil {
+			a.logPane.ScrollPos = f.Offset
+			if a.logPane.Mode == components.LogPaneHidden {
+				a.logPane.CycleMode()
+			}
+		}
+
+	case key.Matches(msg, ui.Keys.Action1):
+		return a.handleApproveFromPRDetail()
+	case key.Matches(msg, ui.Keys.Action2):
+		return a.handleMergeFromPRDetail()
+	case key.Matches(msg, ui.Keys.Action3):
+		return a.handleDismissFromPRDetail()
+
+	case key.Matches(msg, ui.Keys.Remote):
+		if a.prDetailView.PR.HTMLURL != "" {
+			go openBrowser(a.prDetailView.PR.HTMLURL)
+		}
+	}
 	return a, nil
 }
 
-func (a App) handleMerge(pr *models.PullRequest) (tea.Model, tea.Cmd) {
-	repo := a.detailView.Repo.FullName
+// --- Drill-down action handlers ---
+
+func (a App) handleRerunFromRunDetail() (tea.Model, tea.Cmd) {
+	if a.runDetailView == nil {
+		return a, nil
+	}
+	client := a.client
+	ctx := a.ctx
+	repo := a.runDetailView.RepoName
+	runID := a.runDetailView.Run.ID
+	return a, func() tea.Msg {
+		if err := client.Rerun(ctx, repo, runID); err != nil {
+			return actionResultMsg{Message: "Rerun failed: " + err.Error(), IsError: true}
+		}
+		return actionResultMsg{Message: "Rerun triggered", IsError: false}
+	}
+}
+
+func (a App) handleRerunFailedFromRunDetail() (tea.Model, tea.Cmd) {
+	if a.runDetailView == nil {
+		return a, nil
+	}
+	client := a.client
+	ctx := a.ctx
+	repo := a.runDetailView.RepoName
+	runID := a.runDetailView.Run.ID
+	return a, func() tea.Msg {
+		if err := client.RerunFailed(ctx, repo, runID); err != nil {
+			return actionResultMsg{Message: "Rerun failed: " + err.Error(), IsError: true}
+		}
+		return actionResultMsg{Message: "Rerun failed jobs triggered", IsError: false}
+	}
+}
+
+func (a App) handleApproveFromPRDetail() (tea.Model, tea.Cmd) {
+	if a.prDetailView == nil {
+		return a, nil
+	}
+	client := a.client
+	ctx := a.ctx
+	repo := a.prDetailView.RepoName
+	number := a.prDetailView.PR.Number
+	return a, func() tea.Msg {
+		if err := client.Approve(ctx, repo, number); err != nil {
+			return actionResultMsg{Message: "Approve failed: " + err.Error(), IsError: true}
+		}
+		return actionResultMsg{Message: fmt.Sprintf("Approved PR #%d", number), IsError: false}
+	}
+}
+
+func (a App) handleMergeFromPRDetail() (tea.Model, tea.Cmd) {
+	if a.prDetailView == nil {
+		return a, nil
+	}
+	client := a.client
+	ctx := a.ctx
+	repo := a.prDetailView.RepoName
+	number := a.prDetailView.PR.Number
 	a.confirmBar.Show(
-		fmt.Sprintf("Merge PR #%d? [y/n]", pr.Number),
-		func() {
-			go func() {
-				if err := a.client.Merge(a.ctx, repo, pr.Number); err != nil {
-					a.flash.Show("Merge failed: "+err.Error(), true)
-				} else {
-					a.flash.Show(fmt.Sprintf("Merged PR #%d", pr.Number), false)
+		fmt.Sprintf("Merge PR #%d? [y/n]", number),
+		func() tea.Cmd {
+			return func() tea.Msg {
+				if err := client.Merge(ctx, repo, number); err != nil {
+					return actionResultMsg{Message: "Merge failed: " + err.Error(), IsError: true}
 				}
-			}()
+				return actionResultMsg{Message: fmt.Sprintf("Merged PR #%d", number), IsError: false}
+			}
 		},
-		func() {},
+		func() tea.Cmd { return nil },
+	)
+	return a, nil
+}
+
+func (a App) handleDismissFromPRDetail() (tea.Model, tea.Cmd) {
+	if a.prDetailView == nil {
+		return a, nil
+	}
+	repo := a.prDetailView.RepoName
+	number := a.prDetailView.PR.Number
+	dismissKey := fmt.Sprintf("%s:%d", repo, number)
+	a.dismissed[dismissKey] = true
+	if a.db != nil {
+		a.db.AddDismissed(repo, number)
+	}
+	a.flash.Show(fmt.Sprintf("Dismissed PR #%d", number), false)
+	a.mode = ui.ViewDetail
+	a.prDetailView = nil
+	a.repos = a.buildRepoStates()
+	a.compactView.UpdateRepos(a.repos)
+	return a, nil
+}
+
+// --- Action handlers ---
+
+func (a App) handleRerun(run *models.WorkflowRun) (tea.Model, tea.Cmd) {
+	client := a.client
+	ctx := a.ctx
+	repo := a.detailView.Repo.FullName
+	runID := run.ID
+	conclusion := run.Conclusion
+	return a, func() tea.Msg {
+		var err error
+		if conclusion == "failure" {
+			err = client.RerunFailed(ctx, repo, runID)
+		} else {
+			err = client.Rerun(ctx, repo, runID)
+		}
+		if err != nil {
+			return actionResultMsg{Message: "Rerun failed: " + err.Error(), IsError: true}
+		}
+		return actionResultMsg{Message: "Rerun triggered", IsError: false}
+	}
+}
+
+func (a App) handleApprove(pr *models.PullRequest) (tea.Model, tea.Cmd) {
+	client := a.client
+	ctx := a.ctx
+	repo := a.detailView.Repo.FullName
+	number := pr.Number
+	return a, func() tea.Msg {
+		if err := client.Approve(ctx, repo, number); err != nil {
+			return actionResultMsg{Message: "Approve failed: " + err.Error(), IsError: true}
+		}
+		return actionResultMsg{Message: fmt.Sprintf("Approved PR #%d", number), IsError: false}
+	}
+}
+
+func (a App) handleMerge(pr *models.PullRequest) (tea.Model, tea.Cmd) {
+	client := a.client
+	ctx := a.ctx
+	repo := a.detailView.Repo.FullName
+	number := pr.Number
+	a.confirmBar.Show(
+		fmt.Sprintf("Merge PR #%d? [y/n]", number),
+		func() tea.Cmd {
+			return func() tea.Msg {
+				if err := client.Merge(ctx, repo, number); err != nil {
+					return actionResultMsg{Message: "Merge failed: " + err.Error(), IsError: true}
+				}
+				return actionResultMsg{Message: fmt.Sprintf("Merged PR #%d", number), IsError: false}
+			}
+		},
+		func() tea.Cmd { return nil },
 	)
 	return a, nil
 }
@@ -531,20 +954,27 @@ func (a App) handleBatchMerge() (tea.Model, tea.Cmd) {
 		a.flash.Show("No agent PRs ready to merge", false)
 		return a, nil
 	}
+	client := a.client
+	ctx := a.ctx
+	readyCopy := ready
 	a.confirmBar.Show(
-		fmt.Sprintf("Merge %d agent PRs? [y/n]", len(ready)),
-		func() {
-			go func() {
+		fmt.Sprintf("Merge %d agent PRs? [y/n]", len(readyCopy)),
+		func() tea.Cmd {
+			return func() tea.Msg {
 				merged := 0
-				for _, item := range ready {
-					if err := a.client.Merge(a.ctx, item.repo, item.pr.Number); err == nil {
+				for _, item := range readyCopy {
+					if err := client.Merge(ctx, item.repo, item.pr.Number); err == nil {
 						merged++
 					}
 				}
-				a.flash.Show(fmt.Sprintf("Merged %d/%d agent PRs", merged, len(ready)), merged < len(ready))
-			}()
+				isErr := merged < len(readyCopy)
+				return actionResultMsg{
+					Message: fmt.Sprintf("Merged %d/%d agent PRs", merged, len(readyCopy)),
+					IsError: isErr,
+				}
+			}
 		},
-		func() {},
+		func() tea.Cmd { return nil },
 	)
 	return a, nil
 }
@@ -553,26 +983,28 @@ func (a App) handleViewDiff() (tea.Model, tea.Cmd) {
 	if a.detailView == nil {
 		return a, nil
 	}
+	client := a.client
+	ctx := a.ctx
 	repo := a.detailView.Repo.FullName
 
 	if item := a.detailView.SelectedReviewItem(); item != nil {
-		go func() {
-			diff, err := a.client.GetPullDiff(a.ctx, repo, item.PR.Number)
+		number := item.PR.Number
+		return a, func() tea.Msg {
+			diff, err := client.GetPullDiff(ctx, repo, number)
 			if err != nil {
-				a.flash.Show("Failed to fetch diff: "+err.Error(), true)
-				return
+				return diffResultMsg{Err: err}
 			}
-			a.logPane.SetContent(fmt.Sprintf("PR #%d diff", item.PR.Number), diff, false)
-			if a.logPane.Mode == components.LogPaneHidden {
-				a.logPane.CycleMode()
-			}
-		}()
-	} else if run := a.detailView.SelectedRun(); run != nil {
-		go func() {
+			return diffResultMsg{Title: fmt.Sprintf("PR #%d diff", number), Content: diff}
+		}
+	}
+
+	if run := a.detailView.SelectedRun(); run != nil {
+		jobs := run.Jobs
+		return a, func() tea.Msg {
 			var logContent strings.Builder
-			for _, job := range run.Jobs {
+			for _, job := range jobs {
 				if job.Conclusion == "failure" && job.ID != 0 {
-					logs, err := a.client.GetFailedLogs(a.ctx, repo, job.ID)
+					logs, err := client.GetFailedLogs(ctx, repo, job.ID)
 					if err == nil && logs != "" {
 						logContent.WriteString(fmt.Sprintf("=== %s ===\n", job.Name))
 						logContent.WriteString(logs)
@@ -580,16 +1012,14 @@ func (a App) handleViewDiff() (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-			if logContent.Len() > 0 {
-				a.logPane.SetContent("Job logs", logContent.String(), false)
-			} else {
-				a.logPane.SetContent("Job logs", "No failed job logs available", false)
+			content := logContent.String()
+			if content == "" {
+				content = "No failed job logs available"
 			}
-			if a.logPane.Mode == components.LogPaneHidden {
-				a.logPane.CycleMode()
-			}
-		}()
+			return diffResultMsg{Title: "Job logs", Content: content}
+		}
 	}
+
 	return a, nil
 }
 
@@ -635,6 +1065,14 @@ func (a App) View() tea.View {
 		if a.detailView != nil {
 			content = a.detailView.Render(a.width, contentHeight)
 		}
+	case ui.ViewRunDetail:
+		if a.runDetailView != nil {
+			content = a.runDetailView.Render(a.width, contentHeight)
+		}
+	case ui.ViewPRDetail:
+		if a.prDetailView != nil {
+			content = a.prDetailView.Render(a.width, contentHeight)
+		}
 	}
 
 	if a.help.Visible {
@@ -642,7 +1080,8 @@ func (a App) View() tea.View {
 		content = a.help.Render(viewName, a.width, contentHeight)
 	}
 
-	if a.logPane.Mode != components.LogPaneHidden && a.mode == ui.ViewDetail {
+	supportsLogPane := a.mode == ui.ViewDetail || a.mode == ui.ViewRunDetail || a.mode == ui.ViewPRDetail
+	if a.logPane.Mode != components.LogPaneHidden && supportsLogPane {
 		logHeight := contentHeight / 2
 		if a.logPane.Mode == components.LogPaneFull {
 			logHeight = contentHeight
@@ -678,9 +1117,24 @@ func (a App) View() tea.View {
 func (a App) renderHeader() string {
 	left := lipgloss.NewStyle().Foreground(ui.ColorAccent).Bold(true).Render("CIMON")
 
-	if a.mode == ui.ViewDetail && a.detailView != nil {
-		repoStyle := lipgloss.NewStyle().Foreground(ui.ColorPurple)
-		left += " ─ " + repoStyle.Render(a.detailView.Repo.FullName)
+	switch a.mode {
+	case ui.ViewDetail:
+		if a.detailView != nil {
+			repoStyle := lipgloss.NewStyle().Foreground(ui.ColorPurple)
+			left += " ─ " + repoStyle.Render(a.detailView.Repo.FullName)
+		}
+	case ui.ViewRunDetail:
+		if a.runDetailView != nil {
+			repoStyle := lipgloss.NewStyle().Foreground(ui.ColorPurple)
+			sectionStyle := lipgloss.NewStyle().Foreground(ui.ColorBlue)
+			left += " ─ " + repoStyle.Render(a.runDetailView.RepoName) + " ─ " + sectionStyle.Render("CI Pipeline")
+		}
+	case ui.ViewPRDetail:
+		if a.prDetailView != nil {
+			repoStyle := lipgloss.NewStyle().Foreground(ui.ColorPurple)
+			sectionStyle := lipgloss.NewStyle().Foreground(ui.ColorBlue)
+			left += " ─ " + repoStyle.Render(a.prDetailView.RepoName) + " ─ " + sectionStyle.Render("Pull Request")
+		}
 	}
 
 	timeStr := time.Now().Format("15:04")
@@ -709,12 +1163,17 @@ func (a App) renderFooter() string {
 		return lipgloss.NewStyle().Foreground(color).Render(a.flash.Message)
 	}
 
-	if a.mode == ui.ViewDetail {
-		muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
-		return muted.Render("[r]rerun [A]approve [m]merge [v]diff [o]browser [Esc]back")
+	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	switch a.mode {
+	case ui.ViewDetail:
+		return muted.Render("[1]rerun/approve [2]diff/logs [3]dismiss [e]log [r]github [a]back")
+	case ui.ViewRunDetail:
+		return muted.Render("[1]rerun [2]rerun-failed [e]logs [r]github [a]back")
+	case ui.ViewPRDetail:
+		return muted.Render("[1]approve [2]merge [3]dismiss [e]diff [r]github [a]back")
+	default:
+		return muted.Render(a.statusText)
 	}
-
-	return lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(a.statusText)
 }
 
 func openBrowser(url string) {

@@ -2,7 +2,7 @@
 
 ## What This Is
 
-CIMON (CI Monitor) is a Bubbletea TUI for monitoring GitHub Actions CI/CD pipelines and agent-created PRs across multiple repositories. Two-view model: compact status board + per-repo drill-in, designed for side-pane use alongside Claude Code. Config-driven, Tokyo Night color scheme. Written in Go.
+CIMON (CI Monitor) is a Bubbletea TUI for monitoring GitHub Actions CI/CD pipelines and agent-created PRs across multiple repositories. Four-view model: compact status board → per-repo detail → run detail / PR detail drill-down. WASD navigation + numbered actions. Designed for side-pane use alongside Claude Code. Config-driven, Tokyo Night color scheme. Written in Go.
 
 ## Commands
 
@@ -85,8 +85,8 @@ internal/
 │   ├── notify.go        # CanNotify, Send — Linux notify-send, macOS osascript
 │   └── notify_test.go
 └── ui/
-    ├── app.go           # ViewMode enum (ViewCompact, ViewDetail)
-    ├── keys.go          # KeyMap — v2 keybindings (compact + detail) via bubbles/v2/key
+    ├── app.go           # ViewMode enum (ViewCompact, ViewDetail, ViewRunDetail, ViewPRDetail)
+    ├── keys.go          # KeyMap — WASD + numbered action keybindings via bubbles/v2/key
     ├── theme.go         # Tokyo Night palette, StatusColor, StatusDot, RepoColor
     ├── views/
     │   ├── repostate.go     # RepoState, InlineStatus, PRSummary, ComputeInlineStatus, SortByAttention, DetectNewFlag
@@ -94,14 +94,20 @@ internal/
     │   ├── compact.go       # CompactView — repo list with inline expansion, cursor, NEW flag, PR summaries
     │   ├── compact_test.go  # empty, all-green, failure expansion, active progress, cursor, NEW flag, PR summary
     │   ├── detail.go        # DetailView — CI pipeline + PR sections, linear cursor, action applicability
-    │   └── detail_test.go   # pipeline render, PR render, linear cursor, selected run/PR, empty repo
+    │   ├── detail_test.go   # pipeline render, PR render, linear cursor, selected run/PR, empty repo
+    │   ├── rundetail.go     # RunDetailView — single run drill-down, jobs/steps, cursor, expand/collapse
+    │   ├── rundetail_test.go # render, cursor, step expansion, empty/loading states
+    │   ├── prdetail.go      # PRDetailView — single PR drill-down, file list, CI/review status
+    │   ├── prdetail_test.go # render, cursor, file list, loading states
+    │   ├── diffparse.go     # ParseDiffFiles — unified diff parser, file list with +/- counts and offsets
+    │   └── diffparse_test.go # single/multi/binary/rename diff parsing
     └── components/
         ├── pipeline.go      # PipelineView — job stages, known failure tags, selector + filter, format helpers
-        ├── selector.go      # Selector — j/k cursor navigation with wrapping
-        ├── confirmbar.go    # ConfirmBar — y/n/Esc confirmation prompt
+        ├── selector.go      # Selector — w/s cursor navigation with wrapping
+        ├── confirmbar.go    # ConfirmBar — y/n/Esc confirmation prompt, returns tea.Cmd
         ├── flash.go         # Flash — timed success/error messages
         ├── logpane.go       # LogPane — diff highlighting, streaming LIVE mode
-        ├── help.go          # HelpOverlay — context-sensitive keybinding display
+        ├── help.go          # HelpOverlay — context-sensitive keybinding display per view mode
         └── components_test.go # selector, confirm, flash, pipeline, format helpers tests
 ```
 
@@ -110,7 +116,7 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 ## Key Patterns
 
 - **Bubbletea v2 Elm architecture:** Model-Update-View pattern. `View()` returns `tea.View` (not string). `tea.NewView(str)` with `.AltScreen = true`.
-- **Two-view model:** CompactView (repo list + inline expansion) ↔ DetailView (per-repo drill-in). No screen tabs.
+- **Four-view model:** CompactView → DetailView → RunDetailView / PRDetailView. WASD + numbered actions. `d`/`Enter` drills in, `a`/`Esc` backs out.
 - **App wiring:** `internal/app/app.go` owns config, GitHub client, DB, poller, and view models. Separate from `internal/ui/` to avoid circular imports (views import `ui` for theme).
 - **Multi-repo config:** `.cimon.yml` v2 uses `repos` list. v1 `repo` key auto-migrates.
 - **Poller→TUI communication:** Channel + `tea.Cmd` pattern (goroutine sends to channel, tea.Cmd reads from channel). Avoids `p.Send()` deadlock.
@@ -121,7 +127,8 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 - **Inline expansion:** Repos with CI failures or in-progress runs auto-expand detail lines beneath the repo summary.
 - **ETag caching:** Bounded LRU cache (5000 entries) keyed by URL. Conditional requests with `If-None-Match`. 304s return cached body.
 - **Pure Go SQLite:** `modernc.org/sqlite` (no CGO). Dual connections: writer (MaxOpenConns=1) + reader pool (MaxOpenConns=4). WAL mode.
-- **Selector pattern:** `Selector` struct (Next/Prev/SetCount/Index) embedded in views for j/k navigation.
+- **Async action pattern:** Actions return `tea.Cmd` producing result messages (`actionResultMsg`, `diffResultMsg`, `logsResultMsg`, `jobsResultMsg`). Handlers guard against stale responses (e.g., navigated away before result arrives).
+- **Selector pattern:** `Selector` struct (Next/Prev/SetCount/Index) embedded in views for w/s navigation.
 - **Agent detection:** Configurable patterns (pr_body, commit_trailer, bot_authors) in `AgentPatternsConfig`.
 - **Review queue:** `ReviewItemsFromPulls()` converts PRs into prioritized ReviewItems. Escalation thresholds from config.
 - **Confidence scoring:** `ComputeConfidence()` — 5 signals (CI rate, new failures, agent PRs, review queue) → 0-100 score. Computed internally, not displayed in TUI.
@@ -135,8 +142,8 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 go test ./... -count=1 -v
 ```
 
-296 tests across 12 test packages:
-- `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, compact navigation, Enter drill-in, Esc back, NEW flag detection, View
+320 tests across 15 test packages:
+- `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, compact/detail/run-detail/PR-detail navigation, d drill-in, a/esc back, NEW flag detection, View, async message handling
 - `config_test.go` — v2 parsing, v1 migration, defaults, validation, ConfigError, detect/categorize
 - `client_test.go` — ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
 - `cache_test.go` — store/load, eviction, LRU ordering, delete, len
@@ -149,10 +156,13 @@ go test ./... -count=1 -v
 - `confidence_test.go` — signals, levels, edge cases
 - `polling_test.go` — cadence transitions, intervals, poller integration with httptest
 - `notify_test.go` — CanNotify, Send
-- `components_test.go` — selector, confirm, flash, pipeline, format helpers
+- `components_test.go` — selector, confirm (tea.Cmd return), flash, pipeline, format helpers
 - `repostate_test.go` — inline status computation, PR summary, attention sorting, NEW flag detection
 - `compact_test.go` — empty, all-green, failure expansion, active progress, cursor, NEW flag, PR summary
 - `detail_test.go` — pipeline render, PR render, linear cursor, selected run/PR, empty repo
+- `rundetail_test.go` — render, cursor navigation, step expand/collapse, auto-expand failures, loading state, SetJobs
+- `prdetail_test.go` — render, cursor navigation, file list, CI/review status, agent/draft badges, loading state
+- `diffparse_test.go` — single/multi-file, binary, rename, empty diff parsing
 
 Tests use `httptest` servers and in-memory SQLite. No network calls.
 
@@ -251,32 +261,48 @@ Only `repo` (v1) or `repos` (v2) is required. Everything else has defaults.
 
 ## Keybindings
 
-### Compact View (default)
+### Navigation (all views)
 | Key | Action |
 |-----|--------|
-| `w`/`k` | Cursor up (previous repo) |
-| `s`/`j` | Cursor down (next repo) |
-| `Enter` | Drill into selected repo |
-| `M` | Batch merge all ready agent PRs (with confirm) |
+| `w` / `↑` | Cursor up |
+| `s` / `↓` | Cursor down |
+| `d` / `Enter` | Drill in / expand |
+| `a` / `Esc` | Back / collapse (closes log pane first) |
 | `?` | Help overlay |
 | `q` | Quit |
 
-### Detail View
+### Compact View
 | Key | Action |
 |-----|--------|
-| `w`/`k` | Cursor up (previous item) |
-| `s`/`j` | Cursor down (next item) |
-| `Esc` | Close log pane (if open), else back to compact |
-| `r` | Rerun selected run (no-op on PRs) |
-| `A` | Approve selected PR (no-op on runs) |
-| `m` | Merge selected PR with confirm (no-op on runs) |
-| `x` | Dismiss selected PR (no-op on runs) |
-| `v` | View diff (PR) or job logs (run) in log pane |
-| `o` | Open in browser |
-| `l` | Toggle log pane (hidden → half → full → hidden) |
-| `↑`/`↓` | Scroll log pane content (when log pane open) |
-| `?` | Help overlay |
-| `q` | Quit |
+| `1` | Batch merge all ready agent PRs (with confirm) |
+
+### Detail View (per-repo)
+| Key | Action |
+|-----|--------|
+| `1` | Rerun selected run / Approve selected PR |
+| `2` | View diff (PR) or logs (run) |
+| `3` | Dismiss selected PR |
+| `e` | Toggle log pane (hidden → half → full) |
+| `r` | Open in browser |
+
+### Run Detail View
+| Key | Action |
+|-----|--------|
+| `d` | Expand/collapse job steps |
+| `1` | Rerun workflow |
+| `2` | Rerun failed jobs |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
+
+### PR Detail View
+| Key | Action |
+|-----|--------|
+| `d` | Jump log pane to selected file's diff |
+| `1` | Approve PR |
+| `2` | Merge PR (with confirm) |
+| `3` | Dismiss PR |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
 
 ## Theme
 

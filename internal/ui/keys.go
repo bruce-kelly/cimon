@@ -2,36 +2,29 @@ package ui
 
 import "charm.land/bubbles/v2/key"
 
-// KeyMap defines all keybindings for v2's two-view model.
+// KeyMap defines all keybindings for WASD + numbered action scheme.
 type KeyMap struct {
 	// Navigation
-	Up, Down, Enter, Escape key.Binding
+	Up, Down, DrillIn, Back key.Binding
 
-	// Compact view
-	BatchMerge key.Binding
+	// Context-sensitive actions
+	Action1, Action2, Action3 key.Binding
 
-	// Detail view actions
-	Rerun, Approve, Merge, Dismiss key.Binding
-	ViewDiff, Open                 key.Binding
-
-	// Shared
-	LogCycle, Help, Quit key.Binding
+	// Fixed actions
+	Examine, Remote, Help, Quit key.Binding
 }
 
 // Keys is the global keybinding configuration.
 var Keys = KeyMap{
-	Up:         key.NewBinding(key.WithKeys("w", "k", "up"), key.WithHelp("w/k/↑", "up")),
-	Down:       key.NewBinding(key.WithKeys("s", "j", "down"), key.WithHelp("s/j/↓", "down")),
-	Enter:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-	Escape:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	BatchMerge: key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "batch merge")),
-	Rerun:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rerun")),
-	Approve:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "approve")),
-	Merge:      key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "merge")),
-	Dismiss:    key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "dismiss")),
-	ViewDiff:   key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "view diff/logs")),
-	Open:       key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open in browser")),
-	LogCycle:   key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "toggle log pane")),
-	Help:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-	Quit:       key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	Up:      key.NewBinding(key.WithKeys("w", "up"), key.WithHelp("w/↑", "up")),
+	Down:    key.NewBinding(key.WithKeys("s", "down"), key.WithHelp("s/↓", "down")),
+	DrillIn: key.NewBinding(key.WithKeys("d", "enter"), key.WithHelp("d/enter", "select")),
+	Back:    key.NewBinding(key.WithKeys("a", "esc"), key.WithHelp("a/esc", "back")),
+	Action1: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "action 1")),
+	Action2: key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "action 2")),
+	Action3: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "action 3")),
+	Examine: key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "examine")),
+	Remote:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "github")),
+	Help:    key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 }
