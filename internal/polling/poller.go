@@ -127,10 +127,7 @@ func (p *Poller) pollRepo(ctx context.Context, repo *config.RepoConfig) models.P
 		slog.Error("list pulls failed", "repo", repo.Repo, "err", err)
 		result.Error = err
 	} else {
-		for i := range pulls {
-			github.DetectAgent(&pulls[i], repo.AgentPatterns, "")
-		}
-		result.PullRequests = pulls
+		result.PullRequests = p.client.EnrichPulls(ctx, repo.Repo, pulls, repo.AgentPatterns)
 	}
 
 	rl := p.client.GetRateLimit()

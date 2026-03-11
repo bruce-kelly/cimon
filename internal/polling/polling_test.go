@@ -207,7 +207,7 @@ func TestPoller_Skips404Workflows(t *testing.T) {
 				Repo:   "owner/repo",
 				Branch: "main",
 				Groups: map[string]config.GroupConfig{
-					"ci":     {Workflows: []string{"ci.yml", "missing.yml"}},
+					"ci": {Workflows: []string{"ci.yml", "missing.yml"}},
 				},
 			},
 		},
@@ -240,4 +240,69 @@ func TestPoller_Skips404Workflows(t *testing.T) {
 	// missing.yml should only have been hit once (first poll), then skipped
 	assert.Equal(t, 1, missingHits, "404 workflow should only be requested once")
 	assert.True(t, p.notFound["owner/repo/missing.yml"])
+}
+
+func TestPoller_EnrichesPullRequests(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/owner/repo/actions/workflows/ci.yml/runs":
+			json.NewEncoder(w).Encode(map[string]any{"workflow_runs": []map[string]any{}})
+		case r.URL.Path == "/repos/owner/repo/pulls":
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"number": 7, "title": "Agent PR", "state": "open", "draft": false,
+					"user":       map[string]any{"login": "human"},
+					"head":       map[string]any{"sha": "abc123"},
+					"html_url":   "https://example.com/pr/7",
+					"body":       "Generated with Claude Code",
+					"created_at": now, "updated_at": now,
+					"additions": 10, "deletions": 2,
+				},
+			})
+		case r.URL.Path == "/repos/owner/repo/commits/abc123/status":
+			fmt.Fprint(w, `{"state":"success"}`)
+		case r.URL.Path == "/repos/owner/repo/pulls/7/reviews":
+			fmt.Fprint(w, `[{"state":"APPROVED","submitted_at":"2026-03-11T11:00:00Z"}]`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.CimonConfig{
+		Repos: []config.RepoConfig{
+			{
+				Repo:   "owner/repo",
+				Branch: "main",
+				Groups: map[string]config.GroupConfig{
+					"ci": {Workflows: []string{"ci.yml"}},
+				},
+				AgentPatterns: config.AgentPatternsConfig{
+					PRBody: "Generated with Claude Code",
+				},
+			},
+		},
+		Polling: config.PollingConfig{Idle: 1, Active: 1, Cooldown: 1},
+	}
+
+	resultCh := make(chan models.PollResult, 1)
+	client := github.NewTestClient("test-token", srv.URL)
+	p := New(client, cfg, resultCh)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	p.Start(ctx)
+	defer p.Stop()
+
+	select {
+	case result := <-resultCh:
+		require.Len(t, result.PullRequests, 1)
+		assert.Equal(t, "success", result.PullRequests[0].CIStatus)
+		assert.Equal(t, "approved", result.PullRequests[0].ReviewState)
+		assert.True(t, result.PullRequests[0].IsAgent)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for poll result")
+	}
 }

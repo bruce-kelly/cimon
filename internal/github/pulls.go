@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -67,7 +68,52 @@ func (c *Client) GetCombinedStatus(ctx context.Context, repo, sha string) (strin
 	return resp.State, nil
 }
 
-// FetchPRStatuses concurrently fetches CI status for all PRs that lack one.
+// GetReviewState fetches reviews for a PR and reduces them to a single
+// current state for display and merge gating.
+func (c *Client) GetReviewState(ctx context.Context, repo string, number int) (string, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=100", repo, number)
+	var reviews []struct {
+		State       string `json:"state"`
+		SubmittedAt string `json:"submitted_at"`
+	}
+	if _, err := c.getJSON(ctx, path, &reviews); err != nil {
+		return "none", nil // non-fatal
+	}
+
+	type decision struct {
+		state string
+		at    time.Time
+	}
+	var decisions []decision
+	for _, review := range reviews {
+		var state string
+		switch strings.ToUpper(review.State) {
+		case "APPROVED":
+			state = "approved"
+		case "CHANGES_REQUESTED":
+			state = "changes_requested"
+		default:
+			continue
+		}
+
+		submittedAt, err := time.Parse(time.RFC3339, review.SubmittedAt)
+		if err != nil {
+			submittedAt = time.Time{}
+		}
+		decisions = append(decisions, decision{state: state, at: submittedAt})
+	}
+
+	if len(decisions) == 0 {
+		return "none", nil
+	}
+
+	sort.SliceStable(decisions, func(i, j int) bool {
+		return decisions[i].at.Before(decisions[j].at)
+	})
+	return decisions[len(decisions)-1].state, nil
+}
+
+// FetchPRStatuses concurrently fetches CI status and review state for PRs.
 func (c *Client) FetchPRStatuses(ctx context.Context, pulls []models.PullRequest, repo string) []models.PullRequest {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -75,30 +121,57 @@ func (c *Client) FetchPRStatuses(ctx context.Context, pulls []models.PullRequest
 	copy(result, pulls)
 
 	for i := range result {
-		if result[i].HeadSHA == "" {
+		needsStatus := result[i].HeadSHA != "" && (result[i].CIStatus == "" || result[i].CIStatus == "unknown")
+		needsReview := result[i].ReviewState == "" || result[i].ReviewState == "pending" || result[i].ReviewState == "none"
+		if !needsStatus && !needsReview {
 			continue
 		}
-		if result[i].CIStatus != "" && result[i].CIStatus != "unknown" {
-			continue
+
+		if needsStatus {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				status, err := c.GetCombinedStatus(ctx, repo, result[idx].HeadSHA)
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				result[idx].CIStatus = status
+				mu.Unlock()
+			}(i)
 		}
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			status, err := c.GetCombinedStatus(ctx, repo, result[idx].HeadSHA)
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			result[idx].CIStatus = status
-			mu.Unlock()
-		}(i)
+
+		if needsReview {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				reviewState, err := c.GetReviewState(ctx, repo, result[idx].Number)
+				if err != nil {
+					return
+				}
+				mu.Lock()
+				result[idx].ReviewState = reviewState
+				mu.Unlock()
+			}(i)
+		}
 	}
 	wg.Wait()
 	return result
 }
 
+// EnrichPulls applies agent detection, CI status, and review state to PRs.
+func (c *Client) EnrichPulls(ctx context.Context, repo string, pulls []models.PullRequest, patterns config.AgentPatternsConfig) []models.PullRequest {
+	for i := range pulls {
+		DetectAgent(&pulls[i], patterns, pulls[i].Body)
+	}
+	return c.FetchPRStatuses(ctx, pulls, repo)
+}
+
 // DetectAgent checks if a PR was created by an AI agent based on configurable patterns.
 func DetectAgent(pr *models.PullRequest, patterns config.AgentPatternsConfig, body string) {
+	if body == "" {
+		body = pr.Body
+	}
 	// Check bot authors
 	for _, bot := range patterns.BotAuthors {
 		if strings.EqualFold(pr.Author, bot) {
@@ -151,18 +224,20 @@ func (p ghPull) toModel(repo string) models.PullRequest {
 		updated = time.Now()
 	}
 	return models.PullRequest{
-		Number:    p.Number,
-		Title:     p.Title,
-		Author:    p.User.Login,
-		Repo:      repo,
-		HeadSHA:   p.Head.SHA,
-		HTMLURL:   p.HTMLURL,
-		State:     p.State,
-		Draft:     p.Draft,
-		CreatedAt: created,
-		UpdatedAt: updated,
-		Additions: p.Additions,
-		Deletions: p.Deletions,
-		CIStatus:  "unknown",
+		Number:      p.Number,
+		Title:       p.Title,
+		Body:        p.Body,
+		Author:      p.User.Login,
+		Repo:        repo,
+		HeadSHA:     p.Head.SHA,
+		HTMLURL:     p.HTMLURL,
+		State:       p.State,
+		Draft:       p.Draft,
+		CreatedAt:   created,
+		UpdatedAt:   updated,
+		Additions:   p.Additions,
+		Deletions:   p.Deletions,
+		CIStatus:    "unknown",
+		ReviewState: "none",
 	}
 }

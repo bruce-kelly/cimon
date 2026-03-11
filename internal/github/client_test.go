@@ -906,6 +906,56 @@ func TestGetCombinedStatus_Error_ReturnsUnknown(t *testing.T) {
 	assert.Equal(t, "unknown", status)
 }
 
+func TestGetReviewState_Approved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "/repos/owner/repo/pulls/42/reviews")
+		fmt.Fprint(w, `[
+			{"state":"COMMENTED","submitted_at":"2026-03-11T10:00:00Z"},
+			{"state":"APPROVED","submitted_at":"2026-03-11T11:00:00Z"}
+		]`)
+	}))
+	defer srv.Close()
+
+	client := NewTestClient("test-token", srv.URL)
+	ctx := context.Background()
+
+	state, err := client.GetReviewState(ctx, "owner/repo", 42)
+	require.NoError(t, err)
+	assert.Equal(t, "approved", state)
+}
+
+func TestGetReviewState_ChangesRequestedWinsWhenLatest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[
+			{"state":"APPROVED","submitted_at":"2026-03-11T10:00:00Z"},
+			{"state":"CHANGES_REQUESTED","submitted_at":"2026-03-11T11:00:00Z"}
+		]`)
+	}))
+	defer srv.Close()
+
+	client := NewTestClient("test-token", srv.URL)
+	ctx := context.Background()
+
+	state, err := client.GetReviewState(ctx, "owner/repo", 42)
+	require.NoError(t, err)
+	assert.Equal(t, "changes_requested", state)
+}
+
+func TestGetReviewState_ErrorReturnsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Not Found"}`)
+	}))
+	defer srv.Close()
+
+	client := NewTestClient("test-token", srv.URL)
+	ctx := context.Background()
+
+	state, err := client.GetReviewState(ctx, "owner/repo", 42)
+	require.NoError(t, err)
+	assert.Equal(t, "none", state)
+}
+
 // ---------- Authorization header ----------
 
 func TestAuthorizationHeader(t *testing.T) {
@@ -945,8 +995,18 @@ func TestMutateErrorHandling(t *testing.T) {
 
 func TestFetchPRStatuses(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Respond to combined status requests
-		fmt.Fprint(w, `{"state":"success"}`)
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/sha1/status":
+			fmt.Fprint(w, `{"state":"success"}`)
+		case "/repos/owner/repo/pulls/1/reviews":
+			fmt.Fprint(w, `[{"state":"APPROVED","submitted_at":"2026-03-11T11:00:00Z"}]`)
+		case "/repos/owner/repo/pulls/2/reviews":
+			t.Fatal("review state should not be fetched when already present")
+		case "/repos/owner/repo/pulls/3/reviews":
+			fmt.Fprint(w, `[]`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
 	}))
 	defer srv.Close()
 
@@ -954,16 +1014,55 @@ func TestFetchPRStatuses(t *testing.T) {
 	ctx := context.Background()
 
 	pulls := []models.PullRequest{
-		{Number: 1, HeadSHA: "sha1", CIStatus: "unknown"},
-		{Number: 2, HeadSHA: "sha2", CIStatus: "success"}, // already has status
-		{Number: 3, HeadSHA: "", CIStatus: "unknown"},      // no SHA
+		{Number: 1, HeadSHA: "sha1", CIStatus: "unknown", ReviewState: ""},
+		{Number: 2, HeadSHA: "sha2", CIStatus: "success", ReviewState: "approved"}, // already enriched
+		{Number: 3, HeadSHA: "", CIStatus: "unknown", ReviewState: ""},             // no SHA, but review still fetched
 	}
 
 	result := client.FetchPRStatuses(ctx, pulls, "owner/repo")
 	require.Len(t, result, 3)
-	assert.Equal(t, "success", result[0].CIStatus)        // fetched
-	assert.Equal(t, "success", result[1].CIStatus)        // unchanged
-	assert.Equal(t, "unknown", result[2].CIStatus)        // skipped (no SHA)
+	assert.Equal(t, "success", result[0].CIStatus)
+	assert.Equal(t, "approved", result[0].ReviewState)
+	assert.Equal(t, "success", result[1].CIStatus)
+	assert.Equal(t, "approved", result[1].ReviewState)
+	assert.Equal(t, "unknown", result[2].CIStatus)
+	assert.Equal(t, "none", result[2].ReviewState)
+}
+
+func TestEnrichPulls_DetectsAgentFromBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/commits/sha1/status":
+			fmt.Fprint(w, `{"state":"success"}`)
+		case "/repos/owner/repo/pulls/1/reviews":
+			fmt.Fprint(w, `[{"state":"APPROVED","submitted_at":"2026-03-11T11:00:00Z"}]`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewTestClient("test-token", srv.URL)
+	ctx := context.Background()
+
+	pulls := []models.PullRequest{
+		{
+			Number:      1,
+			Author:      "human",
+			HeadSHA:     "sha1",
+			Body:        "Generated with Claude Code",
+			CIStatus:    "unknown",
+			ReviewState: "",
+		},
+	}
+
+	result := client.EnrichPulls(ctx, "owner/repo", pulls, config.AgentPatternsConfig{
+		PRBody: "Generated with Claude Code",
+	})
+	require.Len(t, result, 1)
+	assert.True(t, result[0].IsAgent)
+	assert.Equal(t, "body", result[0].AgentSource)
+	assert.Equal(t, "approved", result[0].ReviewState)
 }
 
 // ---------- Workflow path extraction edge cases ----------

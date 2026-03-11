@@ -260,6 +260,27 @@ func TestHandleKey_DDrillsIn(t *testing.T) {
 	assert.NotNil(t, a.detailView)
 }
 
+func TestHandleBatchMerge_ReadiesOnlyApprovedAgentPRs(t *testing.T) {
+	a := testApp(t)
+	a.repos = []views.RepoState{
+		{
+			FullName: "owner/repo-a",
+			PRs: []models.PullRequest{
+				{Number: 1, IsAgent: true, CIStatus: "success", ReviewState: "approved", Draft: false},
+				{Number: 2, IsAgent: true, CIStatus: "pending", ReviewState: "approved", Draft: false},
+				{Number: 3, IsAgent: true, CIStatus: "success", ReviewState: "none", Draft: false},
+				{Number: 4, IsAgent: false, CIStatus: "success", ReviewState: "approved", Draft: false},
+			},
+		},
+	}
+
+	m, _ := a.handleBatchMerge()
+	a = m.(App)
+
+	require.True(t, a.confirmBar.Active)
+	assert.Contains(t, a.confirmBar.Message, "Merge 1 agent PR")
+}
+
 func TestHandleKey_AReturnsToCompact(t *testing.T) {
 	a := testApp(t)
 	a.width = 80

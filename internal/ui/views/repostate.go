@@ -12,7 +12,7 @@ import (
 type RepoStatus int
 
 const (
-	StatusPassing     RepoStatus = iota
+	StatusPassing RepoStatus = iota
 	StatusPending
 	StatusActive
 	StatusAgentFailed // non-critical (agent) workflow failure — amber
@@ -162,6 +162,9 @@ func SortByAttention(states []RepoState) {
 		si, sj := states[i], states[j]
 		if (si.Inline.Worst == StatusFailed) != (sj.Inline.Worst == StatusFailed) {
 			return si.Inline.Worst == StatusFailed
+		}
+		if (si.Inline.Worst == StatusAgentFailed) != (sj.Inline.Worst == StatusAgentFailed) {
+			return si.Inline.Worst == StatusAgentFailed
 		}
 		if (si.Inline.Worst == StatusActive) != (sj.Inline.Worst == StatusActive) {
 			return si.Inline.Worst == StatusActive

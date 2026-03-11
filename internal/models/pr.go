@@ -5,6 +5,7 @@ import "time"
 type PullRequest struct {
 	Number      int
 	Title       string
+	Body        string
 	Author      string
 	Repo        string
 	HeadSHA     string

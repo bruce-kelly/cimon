@@ -185,6 +185,18 @@ func TestSortByAttention_ReadyPRsBeforeQuiet(t *testing.T) {
 	assert.Equal(t, "quiet", states[1].RepoName)
 }
 
+func TestSortByAttention_AgentFailuresBeforeActive(t *testing.T) {
+	states := []RepoState{
+		{RepoName: "active", Inline: InlineStatus{Worst: StatusActive}},
+		{RepoName: "agent", Inline: InlineStatus{Worst: StatusAgentFailed}},
+		{RepoName: "quiet", Inline: InlineStatus{Worst: StatusPassing}},
+	}
+	SortByAttention(states)
+	assert.Equal(t, "agent", states[0].RepoName)
+	assert.Equal(t, "active", states[1].RepoName)
+	assert.Equal(t, "quiet", states[2].RepoName)
+}
+
 func TestDetectNewFlag_NewFailure(t *testing.T) {
 	prev := RepoState{Inline: InlineStatus{Worst: StatusPassing}}
 	curr := RepoState{Inline: InlineStatus{Worst: StatusFailed}}
