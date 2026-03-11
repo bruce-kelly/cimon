@@ -109,7 +109,8 @@ func detailRunLine(run models.WorkflowRun, selected bool, width int) string {
 	}
 	ago := components.FormatTimeAgo(run.UpdatedAt)
 
-	line := fmt.Sprintf("  %s %s %s  %s", run.HeadBranch, dot, sha, ago)
+	name := lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(run.Name)
+	line := fmt.Sprintf("  %s %s %s  %s  %s", run.HeadBranch, dot, sha, ago, name)
 
 	if selected {
 		style := lipgloss.NewStyle().Background(ui.ColorSelection)
