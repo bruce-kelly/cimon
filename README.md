@@ -1,6 +1,6 @@
 # CIMON — CI Monitor TUI for GitHub Actions
 
-A terminal control plane for monitoring GitHub Actions pipelines, tracking agent activity, and managing PR reviews across multiple repositories.
+A compact terminal control plane for monitoring GitHub Actions pipelines and managing PR reviews across multiple repositories. Designed to run as a side pane alongside your editor.
 
 <!-- screenshot placeholder -->
 
@@ -26,28 +26,44 @@ go install github.com/bruce-kelly/cimon/cmd/cimon@latest
 2. **Set up config** — `cimon init` (interactive wizard discovers your repos and workflows)
 3. **Edit config** — Tweak `.cimon.yml` if needed (see [Config Reference](#config-reference))
 4. **Run** — `cimon`
-5. **Navigate** — `j`/`k` to move, `Enter` for actions, `?` for help
+5. **Navigate** — `j`/`k` to move, `Enter` to drill in, `?` for help
 
 CIMON searches for `.cimon.yml` starting from the current directory, walking up to the root. If no config is found, it offers to run the setup wizard automatically.
 
+## How It Works
+
+CIMON has two views:
+
+**Compact View** — One line per repo with inline status. Repos with CI failures or active runs auto-expand to show detail. Sorted by attention priority (failures first). A `NEW` flag appears when something changes.
+
+```
+CIMON ──────────────── 12:47
+
+■ repo-a    ✓  2 PRs (2 ready)
+■ repo-b    ✓  1 PR  (CI ⧗)
+■ repo-c    ✗  3 PRs (1 ready)  NEW
+  ci: build ✗  test ✗  4m ago
+■ repo-d    ● releasing
+  deploy ███████░░░ 7/10  1:22
+
+────────────── active 5s  rl:4830
+```
+
+**Detail View** — Press `Enter` to drill into a repo. See recent CI runs with job expansion, open PRs sorted by review priority. Take action directly: rerun, approve, merge, dismiss, view diff.
+
 ## Features
 
-- **Multi-repo monitoring** — Watch CI pipelines across all your repositories from one dashboard
+- **Multi-repo monitoring** — Watch CI pipelines across all your repositories from one compact view
+- **Inline expansion** — Failed and active repos auto-expand to show job details and progress bars
 - **Review queue** — Priority-sorted PRs needing your attention, with escalation coloring by age
-- **Agent tracking** — Sparkline history, outcome states, and schedule info for agent workflows (Claude Code, Copilot, etc.)
-- **Agent dispatch** — Spawn Claude Code agents directly from the TUI and track their lifecycle
-- **Auto-fix copilot** — Automatically dispatch fix agents on new CI failures with cooldown and known failure detection
-- **Agent lifecycle** — Track agent tasks from dispatch to PR creation, with batch merge for ready agent PRs
-- **Release confidence** — 5-signal scoring (CI rate, failures, agent PRs, review queue) on the release screen
-- **Catch-up overlay** — Summarizes CI/agent/PR changes after idle periods
+- **Agent PR detection** — Identifies agent-created PRs (Claude Code, Copilot, etc.) with configurable patterns
+- **Batch merge** — Merge all ready agent PRs across repos with one keypress (`M`)
+- **Change detection** — `NEW` flag on repo lines when CI breaks, PRs become merge-ready, or releases start
+- **Attention sorting** — Repos ordered by priority: failures → active → ready PRs → all-green
+- **Log pane** — View PR diffs and failed job logs without leaving the terminal
 - **Cross-repo PR discovery** — Auto-discover PRs requesting your review across GitHub
 - **Adaptive polling** — Automatic rate adjustment: idle (30s), active (5s), cooldown
-- **Release tracker** — Focused view on release workflows with job status and history
-- **Timeline feed** — Chronological cross-repo event stream with color coding
-- **Metrics screen** — Historical CI health and agent task statistics from SQLite
-- **Filter bar** — `/` to filter any list by multi-term case-insensitive search
-- **SQLite persistence** — Workflow runs, PRs, agent tasks, and review events stored locally
-- **Agent scheduling** — Cron-based task dispatch with double-fire prevention
+- **SQLite persistence** — Workflow runs, PRs, and review events stored locally
 - **Desktop notifications** — Opt-in alerts for CI failures (Linux/macOS)
 - **ETag caching** — Conditional requests minimize API usage; 304s don't count against rate limits
 - **Cross-platform** — Single binary for Linux, macOS, and Windows (amd64/arm64)
@@ -64,7 +80,6 @@ repos:
       ci:
         label: "CI Pipeline"
         workflows: [ci.yml]
-        expand_jobs: true
 ```
 
 Multi-repo with agents and review queue:
@@ -77,7 +92,6 @@ repos:
       ci:
         label: "CI"
         workflows: [ci.yml]
-        expand_jobs: true
       agents:
         label: "Agents"
         workflows: [claude.yml]
@@ -94,7 +108,6 @@ repos:
       release:
         label: "Deploy"
         workflows: [deploy.yml]
-        auto_focus: true
 
 review_queue:
   auto_discover: true
@@ -110,44 +123,31 @@ polling:
 
 Only `repos` is required. Everything else has defaults. Old single-repo configs (`repo:` key) auto-migrate.
 
-See [`docs/getting-started.md`](docs/getting-started.md) for the full setup guide.
-
 ## Keybindings
 
-### Global
+### Compact View
 
 | Key | Action |
 |-----|--------|
-| `1`/`2`/`3`/`4` | Switch screen (dashboard / timeline / release / metrics) |
-| `l` | Cycle log pane (off / docked / fullscreen) |
-| `/` | Open filter bar |
-| `?` | Toggle help overlay |
-| `Esc` | Back / close overlay / clear filter |
+| `j`/`k` (`w`/`s`) | Navigate repos |
+| `Enter` | Drill into selected repo |
+| `M` | Batch merge ready agent PRs |
+| `?` | Help |
 | `q` | Quit |
 
-### Dashboard
+### Detail View
 
 | Key | Action |
 |-----|--------|
-| `j`/`k` (`w`/`s`) | Navigate items |
-| `Tab` | Cycle widget focus |
-| `Enter` | Open action menu for selected item |
-| `r` | Smart rerun (failed jobs or full rerun) |
-| `a` | Approve PR |
-| `m` | Merge PR |
-| `v` | View PR diff / agent output |
-| `x` | Dismiss item |
+| `j`/`k` (`w`/`s`) | Navigate runs and PRs |
+| `r` | Rerun (smart: failed jobs or full) |
+| `A` | Approve PR |
+| `m` | Merge PR (with confirm) |
+| `x` | Dismiss PR |
+| `v` | View diff / job logs |
 | `o` | Open in browser |
-| `D` | Dispatch Claude agent |
-| `M` | Batch merge ready agent PRs |
-
-### Release
-
-| Key | Action |
-|-----|--------|
-| `Left`/`Right` | Switch repos |
-| `r` | Rerun |
-| `o` | Open in browser |
+| `l` | Toggle log pane |
+| `Esc` | Back to compact view |
 
 ## Requirements
 

@@ -2,7 +2,7 @@
 
 ## What This Is
 
-CIMON (CI Monitor) is a Bubbletea TUI for monitoring GitHub Actions CI/CD pipelines and Claude Code agent activity across multiple repositories. Tracks agent-created PRs, surfaces what needs human attention, and dispatches new agent tasks. Config-driven, Tokyo Night color scheme. Written in Go.
+CIMON (CI Monitor) is a Bubbletea TUI for monitoring GitHub Actions CI/CD pipelines and agent-created PRs across multiple repositories. Two-view model: compact status board + per-repo drill-in, designed for side-pane use alongside Claude Code. Config-driven, Tokyo Night color scheme. Written in Go.
 
 ## Commands
 
@@ -28,8 +28,8 @@ cmd/cimon/
 
 internal/
 ├── app/
-│   ├── app.go           # App — root Bubbletea model, wires poller→DB→screens, key dispatch, all actions
-│   └── app_test.go      # NewApp, handlePollResult, error classification, key handling, View
+│   ├── app.go           # App — root Bubbletea model, wires poller→DB→views, key dispatch, all actions
+│   └── app_test.go      # NewApp, handlePollResult, error classification, compact/detail navigation, View
 ├── config/
 │   ├── config.go        # .cimon.yml v2 parser, v1 auto-migration, all config structs, Load/LoadFromPath
 │   ├── config_test.go   # v2 parsing, v1 migration, defaults, validation, ConfigError
@@ -47,7 +47,7 @@ internal/
 │   ├── cache_test.go    # store/load, eviction, LRU ordering, delete
 │   ├── errors.go        # AuthError (401/403), RateLimitError (429) with RetryAfter
 │   ├── errors_test.go   # error type assertions, retry-after parsing
-│   ├── runs.go          # ListRuns, GetJobs — workflow run + job fetching
+│   ├── runs.go          # ListRuns, GetJobs, GetFailedLogs — workflow run + job fetching
 │   ├── pulls.go         # ListPulls, GetPullDiff, GetCombinedStatus, FetchPRStatuses, DetectAgent
 │   ├── actions.go       # Approve, Merge, Rerun, RerunFailed, Cancel, CreateTag, DispatchWorkflow, CommentOnPR
 │   ├── search.go        # SearchPulls, DiscoverWorkflows
@@ -85,27 +85,24 @@ internal/
 │   ├── notify.go        # CanNotify, Send — Linux notify-send, macOS osascript
 │   └── notify_test.go
 └── ui/
-    ├── app.go           # Screen type enum (ScreenDashboard, ScreenTimeline, etc.)
-    ├── keys.go          # KeyMap — all keybindings via bubbles/v2/key
+    ├── app.go           # ViewMode enum (ViewCompact, ViewDetail)
+    ├── keys.go          # KeyMap — v2 keybindings (compact + detail) via bubbles/v2/key
     ├── theme.go         # Tokyo Night palette, StatusColor, StatusDot, RepoColor
-    ├── screens/
-    │   ├── dashboard.go     # DashboardModel — 3-panel layout, focus cycling, pipeline/review/roster
-    │   ├── timeline.go      # TimelineModel — cross-repo chronological feed, repo color mapping
-    │   ├── release.go       # ReleaseModel — per-repo release tracker, confidence display, repo switching
-    │   ├── metrics.go       # MetricsModel — CI health + agent stats from DB
-    │   └── screens_test.go  # dashboard, timeline, release, metrics unit tests
+    ├── views/
+    │   ├── repostate.go     # RepoState, InlineStatus, PRSummary, ComputeInlineStatus, SortByAttention, DetectNewFlag
+    │   ├── repostate_test.go # inline status, PR summary, sorting, NEW flag detection
+    │   ├── compact.go       # CompactView — repo list with inline expansion, cursor, NEW flag, PR summaries
+    │   ├── compact_test.go  # empty, all-green, failure expansion, active progress, cursor, NEW flag, PR summary
+    │   ├── detail.go        # DetailView — CI pipeline + PR sections, linear cursor, action applicability
+    │   └── detail_test.go   # pipeline render, PR render, linear cursor, selected run/PR, empty repo
     └── components/
-        ├── pipeline.go      # PipelineView — job stages, known failure tags, selector + filter
+        ├── pipeline.go      # PipelineView — job stages, known failure tags, selector + filter, format helpers
         ├── selector.go      # Selector — j/k cursor navigation with wrapping
-        ├── filterbar.go     # FilterBar — case-insensitive multi-term filter input
-        ├── sparkline.go     # Sparkline — Unicode bar chart rendering
         ├── confirmbar.go    # ConfirmBar — y/n/Esc confirmation prompt
         ├── flash.go         # Flash — timed success/error messages
-        ├── actionmenu.go    # ActionMenu — contextual action popup
         ├── logpane.go       # LogPane — diff highlighting, streaming LIVE mode
         ├── help.go          # HelpOverlay — context-sensitive keybinding display
-        ├── catchup.go       # CatchupOverlay — idle summary
-        └── components_test.go # selector, filter, sparkline, confirm, flash, action menu, pipeline tests
+        └── components_test.go # selector, confirm, flash, pipeline, format helpers tests
 ```
 
 Full architecture docs: `docs/architecture/` (overview, data-layer, views).
@@ -113,20 +110,21 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 ## Key Patterns
 
 - **Bubbletea v2 Elm architecture:** Model-Update-View pattern. `View()` returns `tea.View` (not string). `tea.NewView(str)` with `.AltScreen = true`.
-- **App wiring:** `internal/app/app.go` owns config, GitHub client, DB, poller, and all screen models. Separate from `internal/ui/` to avoid circular imports (screens import `ui` for theme).
+- **Two-view model:** CompactView (repo list + inline expansion) ↔ DetailView (per-repo drill-in). No screen tabs.
+- **App wiring:** `internal/app/app.go` owns config, GitHub client, DB, poller, and view models. Separate from `internal/ui/` to avoid circular imports (views import `ui` for theme).
 - **Multi-repo config:** `.cimon.yml` v2 uses `repos` list. v1 `repo` key auto-migrates.
 - **Poller→TUI communication:** Channel + `tea.Cmd` pattern (goroutine sends to channel, tea.Cmd reads from channel). Avoids `p.Send()` deadlock.
-- **Poll result handling:** Each PollResult persists runs/PRs to DB, rebuilds all screen data (pipeline, review queue, agent profiles, timeline, release confidence, metrics), then re-subscribes to the channel.
-- **Two-bar layout:** Fixed top bar (screen tabs) + fixed bottom bar (status). Content truncated to fit between them.
+- **Poll result handling:** Each PollResult persists runs/PRs to DB, rebuilds RepoStates (inline status, PR summaries, review items), detects NEW flags, updates views.
+- **Two-bar layout:** Fixed header (CIMON + clock) + fixed footer (status or action hints). Content truncated to fit between them.
+- **NEW flag:** Change detection indicator on repo lines. Fires on: passing→failed, new ready PR, release started. Clears on cursor selection or 30s timeout via 10s tick.
+- **Attention sorting:** Repos sorted by priority: failures → active runs → ready PRs → all-green.
+- **Inline expansion:** Repos with CI failures or in-progress runs auto-expand detail lines beneath the repo summary.
 - **ETag caching:** Bounded LRU cache (5000 entries) keyed by URL. Conditional requests with `If-None-Match`. 304s return cached body.
 - **Pure Go SQLite:** `modernc.org/sqlite` (no CGO). Dual connections: writer (MaxOpenConns=1) + reader pool (MaxOpenConns=4). WAL mode.
-- **Process group isolation:** Agent subprocesses get `Setpgid: true`. Kill with `syscall.Kill(-pid, SIGTERM)`.
-- **Selector pattern:** `Selector` struct (Next/Prev/SetCount/Index) embedded in list views for j/k navigation.
-- **Filter bar:** `FilterBar.Matches(text)` does case-insensitive multi-term matching. Components expose `FilteredRuns()` etc.
+- **Selector pattern:** `Selector` struct (Next/Prev/SetCount/Index) embedded in views for j/k navigation.
 - **Agent detection:** Configurable patterns (pr_body, commit_trailer, bot_authors) in `AgentPatternsConfig`.
 - **Review queue:** `ReviewItemsFromPulls()` converts PRs into prioritized ReviewItems. Escalation thresholds from config.
-- **Auto-fix copilot:** `AutoFixTracker.Evaluate()` checks cooldown/concurrency/known failures before dispatching.
-- **Confidence scoring:** `ComputeConfidence()` — 5 signals (CI rate, new failures, agent PRs, review queue) → 0-100 score.
+- **Confidence scoring:** `ComputeConfidence()` — 5 signals (CI rate, new failures, agent PRs, review queue) → 0-100 score. Computed internally, not displayed in TUI.
 - **Token discovery:** `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` subprocess.
 - **Zero-config:** `DetectRepo()` parses git remote, `BuildZeroConfig()` creates config from discovered workflows.
 - **GoReleaser:** Cross-platform binaries (linux/darwin/windows × amd64/arm64), Homebrew tap.
@@ -137,8 +135,8 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 go test ./... -count=1 -v
 ```
 
-266 tests across 13 test packages:
-- `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, screen switching, focus cycling, View
+296 tests across 12 test packages:
+- `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, compact navigation, Enter drill-in, Esc back, NEW flag detection, View
 - `config_test.go` — v2 parsing, v1 migration, defaults, validation, ConfigError, detect/categorize
 - `client_test.go` — ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
 - `cache_test.go` — store/load, eviction, LRU ordering, delete, len
@@ -151,8 +149,10 @@ go test ./... -count=1 -v
 - `confidence_test.go` — signals, levels, edge cases
 - `polling_test.go` — cadence transitions, intervals, poller integration with httptest
 - `notify_test.go` — CanNotify, Send
-- `components_test.go` — selector, filter, sparkline, confirm, flash, action menu, pipeline
-- `screens_test.go` — dashboard, timeline, release, metrics, conditional roster
+- `components_test.go` — selector, confirm, flash, pipeline, format helpers
+- `repostate_test.go` — inline status computation, PR summary, attention sorting, NEW flag detection
+- `compact_test.go` — empty, all-green, failure expansion, active progress, cursor, NEW flag, PR summary
+- `detail_test.go` — pipeline render, PR render, linear cursor, selected run/PR, empty repo
 
 Tests use `httptest` servers and in-memory SQLite. No network calls.
 
@@ -251,11 +251,32 @@ Only `repo` (v1) or `repos` (v2) is required. Everything else has defaults.
 
 ## Keybindings
 
-**Global:** `1`/`2`/`3`/`4` switch screen, `l` cycle log pane, `/` filter, `?` help, `Esc` back/close, `q` quit.
+### Compact View (default)
+| Key | Action |
+|-----|--------|
+| `w`/`k` | Cursor up (previous repo) |
+| `s`/`j` | Cursor down (next repo) |
+| `Enter` | Drill into selected repo |
+| `M` | Batch merge all ready agent PRs (with confirm) |
+| `?` | Help overlay |
+| `q` | Quit |
 
-**Dashboard:** `j`/`k` (`w`/`s`) navigate, `Tab` cycle widget focus, `Enter` action menu, `r` smart rerun, `a` approve PR, `m` merge PR, `M` batch merge ready agent PRs, `v` view diff/agent output, `x` dismiss, `o` browser, `D` dispatch agent.
-
-**Release:** `Left`/`Right` switch repos, `r` rerun, `o` browser.
+### Detail View
+| Key | Action |
+|-----|--------|
+| `w`/`k` | Cursor up (previous item) |
+| `s`/`j` | Cursor down (next item) |
+| `Esc` | Close log pane (if open), else back to compact |
+| `r` | Rerun selected run (no-op on PRs) |
+| `A` | Approve selected PR (no-op on runs) |
+| `m` | Merge selected PR with confirm (no-op on runs) |
+| `x` | Dismiss selected PR (no-op on runs) |
+| `v` | View diff (PR) or job logs (run) in log pane |
+| `o` | Open in browser |
+| `l` | Toggle log pane (hidden → half → full → hidden) |
+| `↑`/`↓` | Scroll log pane content (when log pane open) |
+| `?` | Help overlay |
+| `q` | Quit |
 
 ## Theme
 
