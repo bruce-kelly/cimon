@@ -26,13 +26,13 @@ go install github.com/bruce-kelly/cimon/cmd/cimon@latest
 2. **Set up config** — `cimon init` (interactive wizard discovers your repos and workflows)
 3. **Edit config** — Tweak `.cimon.yml` if needed (see [Config Reference](#config-reference))
 4. **Run** — `cimon`
-5. **Navigate** — `j`/`k` to move, `Enter` to drill in, `?` for help
+5. **Navigate** — `w`/`s` to move, `d`/`Enter` to drill in, `?` for help
 
 CIMON searches for `.cimon.yml` starting from the current directory, walking up to the root. If no config is found, it offers to run the setup wizard automatically.
 
 ## How It Works
 
-CIMON has two views:
+CIMON has four views:
 
 **Compact View** — One line per repo with inline status. Repos with CI failures or active runs auto-expand to show detail. Sorted by attention priority (failures first). A `NEW` flag appears when something changes.
 
@@ -49,7 +49,11 @@ CIMON ──────────────── 12:47
 ────────────── active 5s  rl:4830
 ```
 
-**Detail View** — Press `Enter` to drill into a repo. See recent CI runs with job expansion, open PRs sorted by review priority. Take action directly: rerun, approve, merge, dismiss, view diff.
+**Detail View** — Press `d`/`Enter` to drill into a repo. See recent CI runs with job expansion, open PRs sorted by review priority. Take action directly: rerun, approve, merge, dismiss, view diff.
+
+**Run Detail View** — Drill into a specific CI run. See all jobs with expand/collapse for steps. Auto-fetches failed job logs.
+
+**PR Detail View** — Drill into a specific PR. See file list with +/- counts, CI/review status, agent badges. View diffs per file.
 
 ## Features
 
@@ -57,7 +61,7 @@ CIMON ──────────────── 12:47
 - **Inline expansion** — Failed and active repos auto-expand to show job details and progress bars
 - **Review queue** — Priority-sorted PRs needing your attention, with escalation coloring by age
 - **Agent PR detection** — Identifies agent-created PRs (Claude Code, Copilot, etc.) with configurable patterns
-- **Batch merge** — Merge all ready agent PRs across repos with one keypress (`M`)
+- **Batch merge** — Merge all ready agent PRs across repos with one keypress (`1`)
 - **Change detection** — `NEW` flag on repo lines when CI breaks, PRs become merge-ready, or releases start
 - **Attention sorting** — Repos ordered by priority: failures → active → ready PRs → all-green
 - **Log pane** — View PR diffs and failed job logs without leaving the terminal
@@ -125,29 +129,53 @@ Only `repos` is required. Everything else has defaults. Old single-repo configs 
 
 ## Keybindings
 
+### Navigation (all views)
+
+| Key | Action |
+|-----|--------|
+| `w` / `↑` | Cursor up |
+| `s` / `↓` | Cursor down |
+| `d` / `Enter` | Drill in / expand |
+| `a` / `Esc` | Back (closes log pane first) |
+| `?` | Help overlay |
+| `q` | Quit |
+
 ### Compact View
 
 | Key | Action |
 |-----|--------|
-| `j`/`k` (`w`/`s`) | Navigate repos |
-| `Enter` | Drill into selected repo |
-| `M` | Batch merge ready agent PRs |
-| `?` | Help |
-| `q` | Quit |
+| `1` | Batch merge ready agent PRs |
 
 ### Detail View
 
 | Key | Action |
 |-----|--------|
-| `j`/`k` (`w`/`s`) | Navigate runs and PRs |
-| `r` | Rerun (smart: failed jobs or full) |
-| `A` | Approve PR |
-| `m` | Merge PR (with confirm) |
-| `x` | Dismiss PR |
-| `v` | View diff / job logs |
-| `o` | Open in browser |
-| `l` | Toggle log pane |
-| `Esc` | Back to compact view |
+| `1` | Rerun (run) / Approve (PR) |
+| `2` | View diff / logs |
+| `3` | Dismiss PR |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
+
+### Run Detail View
+
+| Key | Action |
+|-----|--------|
+| `d` | Expand/collapse job steps |
+| `1` | Rerun workflow |
+| `2` | Rerun failed jobs |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
+
+### PR Detail View
+
+| Key | Action |
+|-----|--------|
+| `d` | Jump to file diff |
+| `1` | Approve PR |
+| `2` | Merge PR (with confirm) |
+| `3` | Dismiss PR |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
 
 ## Requirements
 

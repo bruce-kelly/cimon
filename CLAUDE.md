@@ -29,7 +29,7 @@ cmd/cimon/
 internal/
 ├── app/
 │   ├── app.go           # App — root Bubbletea model, wires poller→DB→views, key dispatch, all actions
-│   └── app_test.go      # NewApp, handlePollResult, error classification, compact/detail navigation, View
+│   └── app_test.go      # NewApp, handlePollResult, error classification, compact/detail/run-detail/PR-detail navigation, View
 ├── config/
 │   ├── config.go        # .cimon.yml v2 parser, v1 auto-migration, all config structs, Load/LoadFromPath
 │   ├── config_test.go   # v2 parsing, v1 migration, defaults, validation, ConfigError
@@ -142,7 +142,7 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 go test ./... -count=1 -v
 ```
 
-320 tests across 15 test packages:
+321 tests across 12 test packages:
 - `app_test.go` — NewApp, handlePollResult, AuthError/RateLimitError, compact/detail/run-detail/PR-detail navigation, d drill-in, a/esc back, NEW flag detection, View, async message handling
 - `config_test.go` — v2 parsing, v1 migration, defaults, validation, ConfigError, detect/categorize
 - `client_test.go` — ETags, rate limits, 401/403/429 handling, auth header, unmarshal errors
