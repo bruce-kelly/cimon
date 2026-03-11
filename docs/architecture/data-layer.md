@@ -22,11 +22,12 @@ repos:
 
 ### Discovery
 
-`findConfig()` walks from CWD up to filesystem root looking for `.cimon.yml`.
+`findConfigFile()` walks from CWD up to filesystem root looking for `.cimon.yml`, then checks `~/.config/cimon/config.yml`.
 
 ### Zero-config detection (`detect.go`)
 
 - `DetectRepo()` — parses git remote origin URL (SSH and HTTPS formats) via `ParseGitHubRemote()`
+- `DetectHost()` — extracts the GitHub-compatible host from the current git remote
 - `DetectBranch()` — reads `git symbolic-ref HEAD`
 - `CategorizeWorkflow(name)` — maps workflow filenames to categories (ci, release, agent) based on patterns
 - `BuildZeroConfig(repo, branch, workflows)` — creates a `CimonConfig` from discovered data without a YAML file
@@ -42,12 +43,15 @@ repos:
 | `AgentPatternsConfig` | `PRBody`, `CommitTrailer`, `BotAuthors` (all have defaults) |
 | `RepoConfig` | `Repo`, `Branch="main"`, `Groups`, `Secrets`, `AgentPatterns` |
 | `DatabaseConfig` | `Path` (default `~/.local/share/cimon/cimon.db`), `RetentionDays=90` |
+| `KeybindingsConfig` | optional overrides for `Up`, `Down`, `DrillIn`, `Back`, `Filter`, `Action1-3`, `Examine`, `Remote`, `Help`, `Quit` |
 | `ScheduledAgentConfig` | `Name`, `Cron`, `Workflow` or `Prompt`, `Repo` |
 | `AgentsConfig` | `Scheduled []ScheduledAgentConfig`, `MaxConcurrent=2`, `MaxLifetime=1800`, `CaptureOutput` |
 | `CatchupConfig` | `Enabled`, `IdleThreshold=900` (seconds) |
-| `CimonConfig` | `Repos []RepoConfig`, `Polling`, `ReviewQueue`, `Database`, `Agents`, `Notifications`, `Catchup` |
+| `CimonConfig` | `Repos []RepoConfig`, `Polling`, `ReviewQueue`, `Database`, `Keybindings`, `Agents`, `Notifications`, `Catchup` |
 
-Only `Repo` (inside a `RepoConfig`) is required. Everything else has defaults.
+Only `Repo` (inside a `RepoConfig`) is required. Everything else has defaults. `notifications` defaults to `false`; `agents.capture_output` and `catchup.enabled` default to `true`.
+
+`CatchupConfig` is still parsed for compatibility, but the current v2 TUI does not render a catchup overlay.
 
 ---
 
@@ -171,7 +175,7 @@ Runs in a goroutine, polls each repo, deduplicates workflows across config group
 
 `AutoFixTracker.Evaluate()`:
 - Checks: `AutoFix` enabled on group, max concurrent not reached, cooldown not active, failures are new (not known).
-- Returns `AutoFixDecision` with `ShouldFix`, `Reason`, `FailingJobs`.
+- Returns `AutoFixDecision` with `ShouldDispatch`, `Reason`, `FailingJobs`.
 
 `BuildFixPrompt(repo, run, failingJobs)` — constructs prompt for fix agent.
 
@@ -191,18 +195,17 @@ Runs in a goroutine, polls each repo, deduplicates workflows across config group
 
 Priority scoring formula:
 ```
-score = 100.0
+score = 100
 score += ageHours * 2        // older = more urgent
-score += 30 if CI failing
-score += 20 if agent PR
-score += 10 if type is PR
-score -= 50 if approved
+score += 20 if CI failing
+score += 15 if agent PR
+score -= 30 if approved
 score -= 20 if draft
 ```
 
 `EscalationLevel`: Normal (< amber hours), Amber (amber-red hours), Red (> red hours).
 
-`ReviewItemsFromPulls(pulls, dismissed, escalation)` — filters, scores, sorts descending.
+`ReviewItemsFromPulls(pulls, amberHours, redHours, dismissed)` — filters, scores, sorts descending.
 
 ### `Queue` (`queue.go`)
 

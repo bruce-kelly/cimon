@@ -118,7 +118,7 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 - **Bubbletea v2 Elm architecture:** Model-Update-View pattern. `View()` returns `tea.View` (not string). `tea.NewView(str)` with `.AltScreen = true`.
 - **Four-view model:** CompactView → DetailView → RunDetailView / PRDetailView. WASD + numbered actions. `d`/`Enter` drills in, `a`/`Esc` backs out.
 - **App wiring:** `internal/app/app.go` owns config, GitHub client, DB, poller, and view models. Separate from `internal/ui/` to avoid circular imports (views import `ui` for theme).
-- **Multi-repo config:** `.cimon.yml` v2 uses `repos` list. v1 `repo` key auto-migrates.
+- **Multi-repo config:** `.cimon.yml` v2 uses `repos` list. v1 `repo` key auto-migrates. Config discovery checks the current directory tree first, then `~/.config/cimon/config.yml`.
 - **Poller→TUI communication:** Channel + `tea.Cmd` pattern (goroutine sends to channel, tea.Cmd reads from channel). Avoids `p.Send()` deadlock.
 - **Poll result handling:** Each PollResult persists runs/PRs to DB, rebuilds RepoStates (inline status, PR summaries, review items), detects NEW flags, updates views.
 - **Two-bar layout:** Fixed header (CIMON + clock) + fixed footer (status or action hints). Content truncated to fit between them.
@@ -138,7 +138,7 @@ Full architecture docs: `docs/architecture/` (overview, data-layer, views).
 - **Review queue:** `ReviewItemsFromPulls()` converts PRs into prioritized ReviewItems. Escalation thresholds from config.
 - **Confidence scoring:** `ComputeConfidence()` — 5 signals (CI rate, new failures, agent PRs, review queue) → 0-100 score. Computed internally, not displayed in TUI.
 - **Token discovery:** `GITHUB_TOKEN` env → `GH_TOKEN` env → `gh auth token` subprocess.
-- **Zero-config:** `DetectRepo()` parses git remote, `BuildZeroConfig()` creates config from discovered workflows.
+- **Setup helpers:** `DetectRepo()` parses git remote, `DetectHost()` finds the GitHub host, and `BuildZeroConfig()` creates config from discovered workflows for `cimon init`.
 - **GoReleaser:** Cross-platform binaries (linux/darwin/windows × amd64/arm64), Homebrew tap.
 
 ## Testing
@@ -285,7 +285,7 @@ Only `repo` (v1) or `repos` (v2) is required. Everything else has defaults.
 | Key | Action |
 |-----|--------|
 | `1` | Rerun selected CI run / Dispatch selected agent run / Approve selected PR |
-| `2` | View diff (PR) or logs (run) |
+| `2` | Recent attempts (run) / View diff (PR) |
 | `3` | Dismiss selected PR |
 | `e` | Toggle log pane (hidden → half → full) |
 | `r` | Open in browser |

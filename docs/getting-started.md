@@ -55,41 +55,22 @@ repos:
         expand_jobs: true
 ```
 
-### Option C: Auto-prompt
-
-Just run `cimon` with no config file — it will offer to run the setup wizard.
-
 ## 3. Launch
 
 ```bash
 cimon
 ```
 
-CIMON searches for `.cimon.yml` starting from the current directory, walking up to the filesystem root.
+CIMON searches for `.cimon.yml` starting from the current directory, walking up to the filesystem root, then falls back to `~/.config/cimon/config.yml`.
 
-## 4. Navigate Screens
+## 4. Navigate Views
 
-CIMON has four main screens, switched with number keys:
+The current TUI is a four-view drill-down:
 
-### Dashboard (`1`) — Home screen
-
-Three sections:
-
-- **Review Queue** — PRs needing your attention, sorted by priority. Escalation coloring shows age (green < 24h, amber 24-48h, red > 48h).
-- **Pipelines** — Latest CI runs per repo with job stages, SHAs, and elapsed times.
-- **Agent Roster** — Sparkline history and status for each agent workflow, plus any locally dispatched agents.
-
-### Timeline (`2`)
-
-Chronological feed of all workflow runs across repos. Color-coded by repository. Useful for seeing the big picture of what's happening.
-
-### Release Tracker (`3`)
-
-Focused view on release workflows. Shows current job status, confidence scoring, and previous release history. Use `Left`/`Right` to switch between repos.
-
-### Metrics (`4`)
-
-Historical CI health and agent task statistics from SQLite. Per-repo breakdown of success rates, agent effectiveness, and dispatch stats.
+- **Compact view** — one line per repo, sorted by attention priority. Failed and active repos expand inline.
+- **Detail view** — latest runs for one repo, grouped by workflow group, plus open PRs that need attention.
+- **Run detail view** — one workflow run with jobs, step expansion, and failed-job logs.
+- **PR detail view** — one pull request with changed files, CI/review state, and per-file diff jumps.
 
 ## 5. Use Keybindings
 
@@ -97,42 +78,59 @@ Historical CI health and agent task statistics from SQLite. Per-repo breakdown o
 
 | Key | Action |
 |-----|--------|
-| `1`/`2`/`3`/`4` | Switch screen |
-| `j`/`k` | Move up/down in lists |
-| `Tab` | Cycle focus between dashboard widgets |
+| `w` / `↑` | Move up |
+| `s` / `↓` | Move down |
+| `d` / `Enter` | Drill in / select |
+| `a` / `Esc` | Back |
+| `?` | Toggle help |
+| `q` | Quit |
 
-### Quick Actions
-
-| Key | Action |
-|-----|--------|
-| `r` | Smart rerun — reruns failed jobs if any, otherwise full rerun |
-| `a` | Approve the selected PR |
-| `m` | Merge the selected PR |
-| `v` | View PR diff in the log pane |
-| `x` | Dismiss item from review queue |
-| `o` | Open selected item in browser |
-| `D` | Dispatch a Claude Code agent |
-
-### More Actions via Menu
-
-Press `Enter` on any selected item to open the **action menu**. This shows context-appropriate actions:
-
-- **On a PR:** comment, close, create tag
-- **On a run:** cancel, create tag
-- **On an agent:** dispatch workflow
-
-Navigate with `j`/`k`, select with `Enter`, close with `Esc`.
-
-### Log Pane
+### Compact View
 
 | Key | Action |
 |-----|--------|
-| `l` | Cycle log pane: closed -> open (30%) -> fullscreen -> closed |
-| `Esc` | Close log pane |
+| `1` | Batch merge ready agent PRs |
 
-### Help
+### Detail View
 
-Press `?` at any time to see context-sensitive keybinding help for the current screen.
+| Key | Action |
+|-----|--------|
+| `1` | Rerun CI run / dispatch agent workflow / approve PR |
+| `2` | Toggle recent attempts for a run, or view the selected PR diff |
+| `3` | Dismiss PR |
+| `/` | Filter runs and PRs |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
+
+### Run Detail View
+
+| Key | Action |
+|-----|--------|
+| `d` | Expand/collapse job steps |
+| `1` | Rerun workflow |
+| `2` | Rerun failed jobs |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
+
+### PR Detail View
+
+| Key | Action |
+|-----|--------|
+| `d` | Jump to selected file diff |
+| `1` | Approve PR |
+| `2` | Merge PR |
+| `3` | Dismiss PR |
+| `e` | Toggle log pane |
+| `r` | Open on GitHub |
+
+You can override the global bindings in config:
+
+```yaml
+keybindings:
+  up: [k]
+  down: [j]
+  filter: [f]
+```
 
 ## 6. Understand Polling
 
@@ -170,31 +168,17 @@ repos:
       bot_authors: ["github-actions[bot]"]
 ```
 
-The agent roster shows:
-- **Sparkline** — recent run history (green = success, red = failure)
-- **State** — ALERT (failed), running, or idle
-- **Timing** — next scheduled run or time since last run
+Agent workflow failures are treated separately from critical CI failures. In compact view they show as amber, and in detail view they expose a dispatch action instead of a rerun action.
 
-Agent-created PRs are flagged in the review queue and score higher priority.
+## 8. Track PR Reviews
 
-## 8. Dispatch Local Agents
-
-Press `D` to dispatch a Claude Code agent:
-1. Enter a task prompt
-2. Confirm the dispatch
-3. The agent appears in the roster with live status tracking
-
-Dispatched agents run as local subprocesses (`claude -p <task>`). They're automatically terminated on CIMON exit.
-
-## 9. Track PR Reviews
-
-Enable cross-repo review tracking to see PRs that need your attention:
+Review items are built from the open pull requests in your configured repos, plus optional review search queries:
 
 ```yaml
 review_queue:
   auto_discover: true
   extra_filters:
-    - "is:open is:pr review-requested:@me"
+    - "is:open is:pr team-review-requested:platform"
   escalation:
     amber: 24
     red: 48
@@ -206,9 +190,11 @@ The review queue prioritizes items by:
 - Agent source (agent PRs score higher)
 - Review state (approved items sink)
 
-Dismiss items with `x` — they stay dismissed across sessions.
+Dismiss items with `3` from the detail or PR detail view. They stay dismissed across sessions.
 
-## 10. Multi-Repo Setup
+If `auto_discover` is enabled, CIMON asks GitHub CLI for your username and adds a `review-requested:<you>` search query. `extra_filters` adds any other GitHub issue search queries you want to merge into the review queue.
+
+## 9. Multi-Repo Setup
 
 Add multiple repos to monitor everything from one dashboard:
 
@@ -237,7 +223,7 @@ repos:
         workflows: [claude.yml]
 ```
 
-Each repo gets its own pipeline on the dashboard. The timeline merges all repos chronologically. The release tracker lets you switch between repos with arrow keys.
+Each repo appears in compact view. Repos with failures, active runs, or ready PRs rise to the top automatically.
 
 ## Authentication
 
@@ -249,14 +235,16 @@ CIMON discovers your GitHub token in this order:
 
 The easiest path: install `gh` and run `gh auth login`.
 
+For GitHub Enterprise Server, set `GH_HOST` to your hostname before running `cimon`, for example `GH_HOST=github.example.com cimon`.
+
 ## Troubleshooting
 
 **"No .cimon.yml found"** — Run `cimon init` or create the file manually.
 
-**"Auth error — check token"** — Run `gh auth status` to verify your token is valid and has the right scopes.
+**"Auth error — check token"** — Run `gh auth status` to verify your token is valid and has the right scopes. On GitHub Enterprise Server, include the hostname in your auth flow and set `GH_HOST`.
 
 **"Rate limit low"** — CIMON uses ETag caching to minimize API calls. If you're still hitting limits, increase the polling intervals.
 
-**Nothing appears in review queue** — Make sure `auto_discover: true` is set and your GitHub username is detectable via `gh api user --jq .login`.
+**Nothing appears in the review section** — CIMON only shows open PRs from repos listed in your config.
 
 **Agent PRs not flagged** — Check your `agent_patterns` config matches the patterns your agents use (PR body text, commit trailers, or bot usernames).

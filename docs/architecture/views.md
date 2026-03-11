@@ -30,6 +30,7 @@ Each `PollResult`:
 - detects `NEW` flags by comparing current and previous repo state
 - refreshes the active detail/run-detail/pr-detail view when possible
 - updates footer status text with cadence and current rate limit
+- may trigger desktop notifications when enabled and a repo enters a noteworthy state
 
 ### Rendering
 
@@ -46,7 +47,7 @@ The app truncates content to fit between the header and footer because lipgloss 
 `Update()` routes `tea.KeyPressMsg` by active mode:
 
 - `compact` handles repo navigation, drill-in, and batch merge
-- `detail` handles run/PR selection, drill-in, rerun/dispatch/approve, diff viewing, dismissal, and remote open
+- `detail` handles run/PR selection, drill-in, filtering, rerun/dispatch/approve, recent-attempt expansion, diff viewing, dismissal, and remote open
 - `run-detail` handles job navigation, step expansion, rerun, rerun-failed, and remote open
 - `pr-detail` handles file navigation, diff jump, approve, merge, dismiss, and remote open
 
@@ -77,6 +78,8 @@ The detail view renders one repo at a time.
 - Sorts runs by workflow group priority: CI, builds, release/deploy, agents, then other
 - Renders runs first, then review items for open PRs
 - Uses a single linear cursor across both runs and PRs
+- Supports case-insensitive multi-term filtering across runs and PR review items
+- Action 2 on a selected run expands up to three recent attempts for the same workflow
 - Expands selected run rows with job summaries when jobs are already available
 
 ### Run Detail View (`rundetail.go`)
@@ -175,6 +178,7 @@ Context-sensitive keybinding overlay keyed off `ViewMode.String()`.
 | `3` | `Action3` | Context-sensitive tertiary action |
 | `e` | `Examine` | Toggle log pane |
 | `r` | `Remote` | Open selected item on GitHub |
+| `/` | `Filter` | Start filtering in detail view |
 | `?` | `Help` | Toggle help |
 | `q`, `ctrl+c` | `Quit` | Quit |
 

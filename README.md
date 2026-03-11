@@ -30,7 +30,7 @@ go install github.com/bruce-kelly/cimon/cmd/cimon@latest
 4. **Run** — `cimon`
 5. **Navigate** — `w`/`s` to move, `d`/`Enter` to drill in, `?` for help
 
-Cimon searches for `.cimon.yml` starting from the current directory, walking up to the root. If no config is found, it offers to run the setup wizard automatically.
+Cimon searches for `.cimon.yml` starting from the current directory, walking up to the root, then falls back to `~/.config/cimon/config.yml`. If no config is found, run `cimon init`.
 
 ## Overview
 
@@ -52,7 +52,7 @@ CIMON ──────────────── 12:47
 ────────────── active 5s  rl:4830
 ```
 
-**Detail View** — Press `d`/`Enter` to drill into a repo. Runs are grouped by config group (CI Pipeline, Release, Agents, etc.) with section headers, deduplicated to the latest per workflow. From here you can rerun CI, dispatch agent workflows, approve, merge, dismiss, or open diffs and logs.
+**Detail View** — Press `d`/`Enter` to drill into a repo. Runs are grouped by config group (CI Pipeline, Release, Agents, etc.) with section headers, deduplicated to the latest per workflow. From here you can rerun CI, dispatch agent workflows, approve or dismiss PRs, expand recent workflow attempts, filter the list, or open diffs and logs.
 
 **Run Detail View** — Drill into a specific workflow run. See all jobs with expand/collapse for steps. Failed job logs are fetched automatically.
 
@@ -67,13 +67,13 @@ CIMON ──────────────── 12:47
 - **Direct actions** — Rerun workflows, dispatch agent workflows, approve PRs, merge, dismiss, and open GitHub from the TUI
 - **Grouped detail view** — Runs are organized by config group (CI, builds, release, agents) with section headers
 - **Review queue** — Open PRs are summarized and sorted by attention
+- **Review search integration** — Optional review queries can pull additional PRs into the queue with `auto_discover` and `extra_filters`
 - **Agent PR detection** — Agent-created PRs can be identified with configurable patterns
 - **Change detection** — `NEW` flags appear when CI breaks, PRs become merge-ready, or releases start
 - **Resilient polling** — Deleted or renamed workflows return 404 once, then are skipped for the session
 - **Log pane** — View PR diffs and failed job logs without leaving the terminal
 - **Adaptive polling** — Polling automatically speeds up when work is active and slows down when things are quiet
 - **SQLite persistence** — Workflow runs, PRs, and review events are stored locally
-- **Desktop notifications** — Optional CI failure alerts on Linux and macOS
 - **ETag caching** — Conditional requests help reduce API usage
 - **Cross-platform** — Single binary for Linux, macOS, and Windows (amd64/arm64)
 
@@ -120,6 +120,8 @@ repos:
 
 review_queue:
   auto_discover: true
+  extra_filters:
+    - "is:open is:pr team-review-requested:platform"
   escalation:
     amber: 24
     red: 48
@@ -128,9 +130,15 @@ polling:
   idle: 30
   active: 5
   cooldown: 3
+
+keybindings:
+  up: [k]
+  down: [j]
+  filter: [f]
 ```
 
 Only `repos` is required. Everything else has defaults. Old single-repo configs (`repo:` key) auto-migrate.
+If you set `keybindings`, the help overlay and footer hints reflect your overrides.
 
 ## Keybindings
 
@@ -156,8 +164,9 @@ Only `repos` is required. Everything else has defaults. Old single-repo configs 
 | Key | Action |
 |-----|--------|
 | `1` | Rerun (CI run) / Dispatch (agent run) / Approve (PR) |
-| `2` | View diff / logs |
+| `2` | Recent attempts (run) / View diff (PR) |
 | `3` | Dismiss PR |
+| `/` | Filter runs and PRs |
 | `e` | Toggle log pane |
 | `r` | Open on GitHub |
 
@@ -185,6 +194,7 @@ Only `repos` is required. Everything else has defaults. Old single-repo configs 
 ## Requirements
 
 - GitHub token via `GITHUB_TOKEN` env, `GH_TOKEN` env, or `gh auth token`
+- For GitHub Enterprise Server, set `GH_HOST=github.example.com`
 - Terminal with Unicode support
 
 ## Development

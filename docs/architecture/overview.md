@@ -12,7 +12,7 @@ cmd/cimon/
 
 internal/
 ├── app/                 # root Bubbletea model — wires poller→DB→views
-├── config/              # .cimon.yml parsing, v1 migration, zero-config detection
+├── config/              # .cimon.yml parsing, v1 migration, config discovery, setup helpers
 ├── models/              # WorkflowRun, Job, PullRequest, PollResult
 ├── github/              # HTTP client, ETag caching, runs/pulls/actions/search
 ├── db/                  # SQLite persistence (WAL, embedded schema)
@@ -35,10 +35,10 @@ internal/
 .cimon.yml → CimonConfig → github.Client → Poller → PollResult → App → Views → Components
 ```
 
-1. `main.go` loads config, discovers a GitHub token, opens SQLite, and constructs `app.NewApp()`.
+1. `main.go` loads config from `.cimon.yml` or `~/.config/cimon/config.yml`, discovers a GitHub token, opens SQLite, and constructs `app.NewApp()`.
 2. `App.Init()` starts the poller and registers `tea.Cmd` handlers that wait on the poller result channel and the 10-second UI tick.
 3. `Poller` fetches workflow runs and pull requests per repo, applies adaptive polling cadence, and emits `models.PollResult`.
-4. `App.Update()` persists runs and PRs, rebuilds per-repo view state, preserves active drill-down views, and updates status text, flash messages, and overlays.
+4. `App.Update()` persists runs and PRs, rebuilds per-repo view state, preserves active drill-down views, and updates status text, flash messages, notifications, and overlays.
 5. `App.View()` renders a fixed-header, fixed-footer layout with one of four views and an optional log pane/help overlay.
 
 ## View Model
