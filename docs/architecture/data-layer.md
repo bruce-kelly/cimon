@@ -37,7 +37,6 @@ repos:
 |---|---|
 | `GroupConfig` | `Label`, `Workflows []string`, `ExpandJobs`, `AutoFocus`, `AutoFix`, `AutoFixCooldown` |
 | `PollingConfig` | `Idle=30`, `Active=5`, `Cooldown=3` (seconds/ticks) |
-| `ThemeConfig` | `Palette="tokyo-night"` |
 | `EscalationConfig` | `Amber=24`, `Red=48` (hours) |
 | `ReviewQueueConfig` | `AutoDiscover`, `ExtraFilters []string`, `Escalation` |
 | `AgentPatternsConfig` | `PRBody`, `CommitTrailer`, `BotAuthors` (all have defaults) |
@@ -46,7 +45,7 @@ repos:
 | `ScheduledAgentConfig` | `Name`, `Cron`, `Workflow` or `Prompt`, `Repo` |
 | `AgentsConfig` | `Scheduled []ScheduledAgentConfig`, `MaxConcurrent=2`, `MaxLifetime=1800`, `CaptureOutput` |
 | `CatchupConfig` | `Enabled`, `IdleThreshold=900` (seconds) |
-| `CimonConfig` | `Repos []RepoConfig`, `Polling`, `Theme`, `ReviewQueue`, `Database`, `Agents`, `Notifications`, `Catchup` |
+| `CimonConfig` | `Repos []RepoConfig`, `Polling`, `ReviewQueue`, `Database`, `Agents`, `Notifications`, `Catchup` |
 
 Only `Repo` (inside a `RepoConfig`) is required. Everything else has defaults.
 
@@ -77,7 +76,7 @@ Fields: `Repo`, `Number`, `Title`, `State`, `Draft`, `HTMLURL`, `Author`, `Creat
 
 ### `PollResult` (`poll.go`)
 
-One polling cycle's data: `Runs []WorkflowRun`, `Pulls []PullRequest`, `Error string`, `Repo string`, `RateLimitRemaining int`.
+One polling cycle's data: `Runs []WorkflowRun`, `PullRequests []PullRequest`, `Secrets []SecretInfo`, `Error error`, `Repo string`, `RateLimitRemaining int`, `ETag string`.
 
 ---
 
@@ -99,7 +98,8 @@ HTTP client with ETag caching and rate limit tracking.
 
 | Method | File | Notes |
 |---|---|---|
-| `ListRuns(repo, workflowFile, branch, perPage)` | `runs.go` | Returns `[]WorkflowRun`, handles both scoped and unscoped queries |
+| `ListRuns(repo, workflowFile, branch)` | `runs.go` | Branch-scoped query used for CI workflows |
+| `ListRunsUnscoped(repo, workflowFile)` | `runs.go` | Unscoped query used for release and agent workflows |
 | `GetJobs(repo, runID)` | `runs.go` | Returns `[]Job` |
 | `ListPulls(repo)` | `pulls.go` | Returns `[]PullRequest` |
 | `GetPullDiff(repo, number)` | `pulls.go` | Returns raw diff string |
@@ -135,7 +135,7 @@ The cooldown tier prevents immediate drop to idle when a run completes.
 
 ### `Poller` (`poller.go`)
 
-Runs in a goroutine, polls each repo, sends `PollResult` over a channel. The Bubbletea app reads from the channel via a `tea.Cmd`.
+Runs in a goroutine, polls each repo, deduplicates workflows across config groups, skips workflows that have already returned 404, and sends `PollResult` over a channel. The Bubbletea app reads from the channel via a `tea.Cmd`.
 
 ---
 

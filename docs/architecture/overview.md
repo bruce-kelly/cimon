@@ -1,83 +1,66 @@
 # Architecture Overview
 
-CIMON is a Bubbletea TUI for monitoring GitHub Actions CI/CD pipelines across multiple repos. Config-driven via `.cimon.yml`. Tokyo Night theme. Written in Go.
+CIMON is a Bubbletea TUI for monitoring GitHub Actions pipelines and pull requests across multiple repositories. It is config-driven via `.cimon.yml`, uses a local SQLite database for persistence, and renders a four-view terminal UI.
 
 ## Package Map
 
 ```
 cmd/cimon/
-├── main.go              # Cobra root command, Bubbletea program launch
+├── main.go              # Cobra root command, config/token/DB init, launches App
 ├── init.go              # interactive setup wizard
 └── db.go                # `cimon db` subcommand
 
 internal/
-├── app/                 # root Bubbletea model — wires poller→DB→screens
-├── config/              # .cimon.yml parsing, zero-config detection
+├── app/                 # root Bubbletea model — wires poller→DB→views
+├── config/              # .cimon.yml parsing, v1 migration, zero-config detection
 ├── models/              # WorkflowRun, Job, PullRequest, PollResult
 ├── github/              # HTTP client, ETag caching, runs/pulls/actions/search
-├── db/                  # SQLite persistence (WAL, 7 tables, embedded schema)
+├── db/                  # SQLite persistence (WAL, embedded schema)
 ├── polling/             # adaptive cadence poller, state machine
-├── agents/              # classify, profile, dispatch, autofix, scheduler, tracking
-├── review/              # priority scoring, escalation, queue
-├── confidence/          # 5-signal release confidence scoring
-├── notify/              # desktop notifications (Linux/macOS)
+├── agents/              # classification, profiles, dispatch, autofix, scheduler
+├── review/              # PR scoring and review queue
+├── confidence/          # release confidence scoring
+├── notify/              # desktop notifications
 └── ui/
-    ├── app.go           # Screen type enum
-    ├── keys.go          # KeyMap
+    ├── app.go           # ViewMode enum
+    ├── keys.go          # WASD + numbered action keymap
     ├── theme.go         # Tokyo Night palette
-    ├── screens/         # dashboard, timeline, release, metrics
-    └── components/      # pipeline, selector, filterbar, sparkline, logpane, etc.
+    ├── views/           # compact, detail, run-detail, pr-detail
+    └── components/      # selector, confirm bar, flash, log pane, help, pipeline
 ```
 
 ## Data Flow
 
 ```
-.cimon.yml → CimonConfig → github.Client → Poller → PollResult → App → Screens → Components
+.cimon.yml → CimonConfig → github.Client → Poller → PollResult → App → Views → Components
 ```
 
-1. **Startup.** `main.go` loads config via `config.Load()` (CWD walk-up), discovers GitHub token, opens SQLite DB, then passes all three to `app.NewApp()`. The App creates `polling.Poller`, builds config-derived lookups (release/agent workflow maps), and initializes screen models. The `internal/app` package is separate from `internal/ui` to avoid circular imports (screens import `ui` for theme).
+1. `main.go` loads config, discovers a GitHub token, opens SQLite, and constructs `app.NewApp()`.
+2. `App.Init()` starts the poller and registers `tea.Cmd` handlers that wait on the poller result channel and the 10-second UI tick.
+3. `Poller` fetches workflow runs and pull requests per repo, applies adaptive polling cadence, and emits `models.PollResult`.
+4. `App.Update()` persists runs and PRs, rebuilds per-repo view state, preserves active drill-down views, and updates status text, flash messages, and overlays.
+5. `App.View()` renders a fixed-header, fixed-footer layout with one of four views and an optional log pane/help overlay.
 
-2. **Poll cycle.** `Poller` runs in a goroutine, polls each repo, sends `PollResult` over a channel. A `tea.Cmd` reads from the channel and delivers it as a message to the Bubbletea update loop. Adaptive cadence: idle (30s) when nothing running, active (5s) when in-progress, cooldown (N idle ticks) before dropping back.
+## View Model
 
-3. **Data distribution.** App's `Update()` receives `PollResultMsg`, persists runs/jobs/PRs to SQLite, builds review items and agent profiles, syncs agent status, evaluates auto-fix triggers, checks catch-up state. Routes data to the active screen model.
+The TUI is a drill-down flow, not a multi-tab dashboard:
 
-4. **Screen rendering.** Each screen model has a `Render()` method that returns a string. Components compose lipgloss-styled strings. The `Selector` pattern provides j/k navigation for list views.
+- `compact` — one line per repo with inline failure and active-run expansion
+- `detail` — per-repo runs and review items, grouped by configured workflow groups
+- `run-detail` — one workflow run with jobs and expandable steps
+- `pr-detail` — one pull request with diff-derived file list and status badges
 
-5. **Actions.** User keybinding → confirm bar (if destructive) → action handler → GitHub API → flash result.
-
-## Screen Architecture
-
-- **Dashboard (`1`):** Three panels — review queue, active pipelines (per-repo), agent roster. Home screen.
-- **Timeline (`2`):** Unified chronological feed across all repos. Color-coded by repo.
-- **Release (`3`):** Per-repo release pipeline with job status, confidence scoring. Left/right to switch repos.
-- **Metrics (`4`):** Historical CI health and agent task statistics from SQLite, per-repo.
-- **Log Pane (`l`):** Toggleable from any screen. `l` cycles through closed/open/fullscreen. Diff highlighting for PR diffs. LIVE streaming for agent output.
-- **Catch-up:** Overlay after idle > threshold summarizing CI/agent/PR changes while away.
-- **Filter (`/`):** Case-insensitive multi-term filter across all list components. `Esc` clears.
-- **Help (`?`):** Context-sensitive overlay showing available keybindings for current screen.
+Navigation is consistent across views: `w`/`s` move, `d`/`Enter` drills in, `a`/`Esc` backs out, `1`-`3` trigger context-sensitive actions, `e` toggles the log pane, `r` opens GitHub, `?` shows help, and `q` quits.
 
 ## Key Design Decisions
 
-- **Bubbletea v2 Elm architecture.** Pure functional Model-Update-View. `View()` returns `tea.View` with `AltScreen = true`. No direct p.Send() — all communication via channels and tea.Cmd.
-- **Pure Go SQLite.** `modernc.org/sqlite` (no CGO) enables cross-compilation. Dual writer/reader connections with WAL mode.
-- **Multi-repo from the data layer up.** Config, client, models all support multiple repos. Views aggregate.
-- **Process group isolation.** Agent subprocesses use `Setpgid: true` so entire process trees can be killed cleanly.
-- **Backward-compatible config.** v1 `repo` key auto-migrates to v2 `repos` list.
-- **ETag caching.** Bounded LRU cache (5000 entries, `container/list` + `sync.Mutex`). Conditional requests reduce API usage.
-- **GoReleaser distribution.** Single binary for 6 platform targets. Homebrew tap for macOS.
-
-## Dependencies
-
-- `charm.land/bubbletea/v2` — TUI framework (Elm architecture)
-- `charm.land/lipgloss/v2` — terminal styling
-- `charm.land/bubbles/v2` — key bindings
-- `github.com/spf13/cobra` — CLI framework
-- `gopkg.in/yaml.v3` — config parsing
-- `modernc.org/sqlite` — pure Go SQLite
-- `github.com/robfig/cron/v3` — cron schedule computation
-- `github.com/stretchr/testify` — test assertions
+- Bubbletea v2 Elm architecture. Poller-to-TUI communication goes through a channel read by `tea.Cmd`; the app does not call `Program.Send`.
+- `internal/app` is separate from `internal/ui` so views can depend on shared UI theme/types without creating circular imports.
+- The compact view derives repo attention from the latest completed run per workflow file, avoiding stale failures after a newer success.
+- Agent workflows are treated differently from critical CI/build/release workflows, both in severity and in available actions.
+- SQLite uses a single writer connection plus a small read pool under WAL mode for simple cross-platform persistence.
 
 ## Related Docs
 
-- [Data Layer](data-layer.md) — config, models, client, polling, agents, persistence
-- [Views](views.md) — screens, components, keybindings, theme
+- [Data Layer](data-layer.md) — config, models, client, polling, persistence
+- [Views](views.md) — app rendering, views, components, keybindings
